@@ -13,32 +13,54 @@
 
 ---
 
-## ⚡ 3-Minute Setup
+## ⚡ 3-Minute Setup (SIMPLE METHOD)
 
 ### Step 1: Open Colab (30 seconds)
 - Go to: https://colab.research.google.com/
 - New notebook
 - **IMPORTANT**: Runtime → Change runtime type → **GPU** (T4)
 
-### Step 2: Upload Files (1 minute)
-Upload these 3 files to Colab:
+### Step 2: Mount Drive & Install (1 minute)
+**Copy-paste into first cell:**
+```python
+from google.colab import drive
+drive.mount('/content/drive')
+
+!pip install -q streamlit pyngrok openai==1.12.0 torch transformers faiss-cpu
+```
+Run it and authorize Google Drive access.
+
+### Step 3: Upload Files (30 seconds)
+Upload these 2 files using left sidebar (drag & drop):
 ```
 ✅ demo1.py
-✅ run_demo_colab.py
 ✅ stage4_joint_best_revised.pt
 ```
-*Drag and drop to left sidebar*
 
-### Step 3: Run (1 minute)
-In a Colab cell:
+### Step 4: Start Demo (1 minute)
+**Copy-paste into second cell:**
 ```python
-!python run_demo_colab.py
+import os, time
+from pyngrok import ngrok
+
+# Enter your ngrok token here (get from: https://dashboard.ngrok.com)
+NGROK_TOKEN = "YOUR_NGROK_TOKEN_HERE"  # Replace this!
+
+ngrok.set_auth_token(NGROK_TOKEN)
+!pkill -f streamlit; !pkill -f ngrok
+time.sleep(2)
+
+!nohup streamlit run demo1.py --server.port 8501 --server.headless true > /dev/null 2>&1 &
+time.sleep(8)
+
+public_url = ngrok.connect(8501)
+print(f"🌐 Demo URL: {public_url}")
 ```
 
-When prompted, paste your **ngrok token**
+Replace `YOUR_NGROK_TOKEN_HERE` with your actual token, then run!
 
-### Step 4: Open Demo (30 seconds)
-- Click the ngrok URL that appears
+### Step 5: Open Demo (30 seconds)
+- Click the URL from output
 - Enter your **OpenAI API key** in sidebar
 - Click "**Load ShifaMind Model**" (wait 30 sec)
 - ✅ READY!

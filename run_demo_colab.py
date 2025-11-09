@@ -22,10 +22,16 @@ print("="*70)
 print("\n📦 Installing dependencies...")
 os.system('pip install -q streamlit pyngrok openai==1.12.0 torch transformers faiss-cpu')
 
-# Mount Google Drive
-print("\n📁 Mounting Google Drive...")
-from google.colab import drive
-drive.mount('/content/drive', force_remount=False)
+# Check if Google Drive is already mounted
+print("\n📁 Checking Google Drive...")
+if os.path.exists('/content/drive/MyDrive'):
+    print("✅ Google Drive already mounted")
+else:
+    print("⚠️  Google Drive not mounted")
+    print("💡 Please run this first in a Colab cell:")
+    print("    from google.colab import drive")
+    print("    drive.mount('/content/drive')")
+    print("\nContinuing anyway (demo will work if files are in /content)...")
 
 # Setup ngrok
 print("\n🔧 Setting up ngrok tunnel...")
