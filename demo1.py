@@ -36,11 +36,12 @@ import numpy as np
 import pandas as pd
 from transformers import AutoTokenizer, AutoModel
 import streamlit as st
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Set
 from collections import defaultdict
 import json
 import time
 from pathlib import Path
+from tqdm.auto import tqdm
 import faiss
 
 # ============================================================================
@@ -173,52 +174,224 @@ ASSESSMENT: Acute calculous cholecystitis with gallstone disease."""
 }
 
 # ============================================================================
-# CONCEPT STORE (Simplified for Demo)
+# UMLS LOADER (Same as 016.py)
 # ============================================================================
-class ConceptStore:
-    def __init__(self):
-        """Initialize with core medical concepts"""
+class FastUMLSLoader:
+    def __init__(self, umls_path: Path):
+        self.umls_path = umls_path
         self.concepts = {}
-        self._load_core_concepts()
+        self.cui_to_icd10 = defaultdict(list)
+        self.icd10_to_cui = defaultdict(list)
 
-    def _load_core_concepts(self):
-        """Load essential concepts for demo"""
-        # These would normally be loaded from UMLS
-        core_concepts = {
-            # Pneumonia-related
-            'C0032285': {'name': 'Pneumonia', 'definition': 'Inflammation of the lung parenchyma'},
-            'C0010200': {'name': 'Coughing', 'definition': 'Sudden, forceful expulsion of air from lungs'},
-            'C0015967': {'name': 'Fever', 'definition': 'Abnormal elevation of body temperature'},
-            'C0013404': {'name': 'Dyspnea', 'definition': 'Difficult or labored breathing'},
-            'C0034642': {'name': 'Rales', 'definition': 'Crackling sounds in lungs'},
-            'C0152965': {'name': 'Pulmonary infiltrate', 'definition': 'Abnormal substance in lung tissue'},
+    def load_concepts(self, max_concepts: int = 30000):
+        print(f"📚 Loading UMLS concepts (max: {max_concepts})...")
 
-            # Heart failure-related
-            'C0018802': {'name': 'Congestive heart failure', 'definition': 'Heart unable to pump sufficient blood'},
-            'C0013604': {'name': 'Edema', 'definition': 'Abnormal accumulation of fluid in tissues'},
-            'C0085619': {'name': 'Orthopnea', 'definition': 'Dyspnea when lying flat'},
-            'C0034063': {'name': 'Pulmonary edema', 'definition': 'Fluid accumulation in lungs'},
-            'C0232461': {'name': 'S3 gallop', 'definition': 'Third heart sound indicating ventricular dysfunction'},
-            'C0231528': {'name': 'Jugular venous distension', 'definition': 'Elevated neck vein pressure'},
+        target_types = {'T047', 'T046', 'T184', 'T033', 'T048', 'T037', 'T191', 'T020'}
+        cui_to_types = self._load_semantic_types()
 
-            # Sepsis-related
-            'C0243026': {'name': 'Sepsis', 'definition': 'Life-threatening organ dysfunction due to infection'},
-            'C0020649': {'name': 'Hypotension', 'definition': 'Abnormally low blood pressure'},
-            'C0009676': {'name': 'Confusion', 'definition': 'Impaired cognitive function and disorientation'},
-            'C0023530': {'name': 'Leukocytosis', 'definition': 'Elevated white blood cell count'},
-            'C0022658': {'name': 'Kidney disease', 'definition': 'Impairment of renal function'},
-            'C0041296': {'name': 'Urinary tract infection', 'definition': 'Infection of urinary system'},
+        mrconso_path = self.umls_path / 'MRCONSO.RRF'
+        concepts_loaded = 0
 
-            # Cholecystitis-related
-            'C0008325': {'name': 'Cholecystitis', 'definition': 'Inflammation of gallbladder'},
-            'C0162429': {'name': "Murphy's sign", 'definition': 'Pain on palpation of RUQ during deep inspiration'},
-            'C0008350': {'name': 'Gallstone', 'definition': 'Solid crystalline deposit in gallbladder'},
-            'C0000737': {'name': 'Abdominal pain', 'definition': 'Pain in stomach region'},
-            'C0027497': {'name': 'Nausea', 'definition': 'Sensation of needing to vomit'},
-            'C0028960': {'name': 'Obesity', 'definition': 'Excessive body fat accumulation'},
+        with open(mrconso_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in tqdm(f, desc="Loading MRCONSO", total=max_concepts):
+                if concepts_loaded >= max_concepts:
+                    break
+
+                fields = line.strip().split('|')
+                if len(fields) < 15:
+                    continue
+
+                cui = fields[0]
+                lang = fields[1]
+                sab = fields[11]
+                code = fields[13]
+                term = fields[14]
+
+                if lang != 'ENG':
+                    continue
+                if sab not in ['SNOMEDCT_US', 'ICD10CM', 'MSH', 'NCI']:
+                    continue
+
+                if cui not in cui_to_types:
+                    continue
+                types = cui_to_types[cui]
+                if not any(t in target_types for t in types):
+                    continue
+
+                if cui not in self.concepts:
+                    self.concepts[cui] = {
+                        'cui': cui,
+                        'name': term,
+                        'terms': [term],
+                        'sources': {sab: [code]},
+                        'semantic_types': types
+                    }
+                    concepts_loaded += 1
+                else:
+                    if term not in self.concepts[cui]['terms']:
+                        self.concepts[cui]['terms'].append(term)
+
+                if sab == 'ICD10CM' and code:
+                    self.cui_to_icd10[cui].append(code)
+                    self.icd10_to_cui[code].append(cui)
+
+        print(f"✅ Loaded {len(self.concepts)} concepts")
+        return self.concepts
+
+    def _load_semantic_types(self) -> Dict[str, List[str]]:
+        mrsty_path = self.umls_path / 'MRSTY.RRF'
+        cui_to_types = defaultdict(list)
+
+        with open(mrsty_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                fields = line.strip().split('|')
+                if len(fields) >= 2:
+                    cui_to_types[fields[0]].append(fields[1])
+
+        return cui_to_types
+
+    def load_definitions(self, concepts: Dict) -> Dict:
+        print("📖 Loading definitions...")
+        mrdef_path = self.umls_path / 'MRDEF.RRF'
+        definitions_added = 0
+
+        with open(mrdef_path, 'r', encoding='utf-8') as f:
+            for line in tqdm(f, desc="Loading definitions"):
+                fields = line.strip().split('|')
+                if len(fields) >= 6:
+                    cui = fields[0]
+                    definition = fields[5]
+
+                    if cui in concepts and definition:
+                        if 'definition' not in concepts[cui]:
+                            concepts[cui]['definition'] = definition
+                            definitions_added += 1
+
+        print(f"✅ Added {definitions_added} definitions")
+        return concepts
+
+# ============================================================================
+# SEMANTIC TYPE VALIDATOR
+# ============================================================================
+class SemanticTypeValidator:
+    """Filters concepts by clinical relevance (Same as 016.py)"""
+
+    RELEVANT_TYPES = {'T047', 'T046', 'T184', 'T033', 'T048', 'T037', 'T191', 'T020'}
+
+    DIAGNOSIS_SEMANTIC_GROUPS = {
+        'J': {'T047', 'T046', 'T184', 'T033'},
+        'I': {'T047', 'T046', 'T184', 'T033'},
+        'A': {'T047', 'T046', 'T184', 'T033'},
+        'K': {'T047', 'T046', 'T184', 'T033'},
+    }
+
+    def __init__(self, umls_concepts: Dict):
+        self.umls_concepts = umls_concepts
+
+    def validate_concept(self, cui: str, diagnosis_code: str = None) -> bool:
+        if cui not in self.umls_concepts:
+            return False
+
+        concept = self.umls_concepts[cui]
+        semantic_types = set(concept.get('semantic_types', []))
+
+        if not semantic_types.intersection(self.RELEVANT_TYPES):
+            return False
+
+        if diagnosis_code:
+            prefix = diagnosis_code[0]
+            expected_types = self.DIAGNOSIS_SEMANTIC_GROUPS.get(prefix, self.RELEVANT_TYPES)
+            if not semantic_types.intersection(expected_types):
+                return False
+
+        return True
+
+# ============================================================================
+# PHASE 4 CONCEPT STORE (150 concepts - Same as 016.py)
+# ============================================================================
+class Phase4ConceptStore:
+    """Builds the exact 150 concepts as training"""
+
+    def __init__(self, umls_concepts: Dict, icd_to_cui: Dict):
+        self.umls_concepts = umls_concepts
+        self.icd_to_cui = icd_to_cui
+        self.concepts = {}
+        self.semantic_validator = SemanticTypeValidator(umls_concepts)
+
+    def build_concept_set(self, target_icd_codes: List[str], target_concept_count: int = 150):
+        print(f"🔬 Building {target_concept_count} concepts...")
+
+        relevant_cuis = set()
+
+        # Strategy 1: Direct ICD mappings
+        for icd in target_icd_codes:
+            variants = self._get_icd_variants(icd)
+            for variant in variants:
+                if variant in self.icd_to_cui:
+                    cuis = self.icd_to_cui[variant]
+                    validated = [
+                        cui for cui in cuis
+                        if self.semantic_validator.validate_concept(cui, icd)
+                    ]
+                    relevant_cuis.update(validated[:30])
+
+        print(f"  Direct mappings: {len(relevant_cuis)} concepts")
+
+        # Strategy 2: Keyword expansion
+        diagnosis_keywords = {
+            'J189': ['pneumonia', 'lung infection', 'respiratory infection',
+                     'infiltrate', 'bacterial pneumonia', 'aspiration'],
+            'I5023': ['heart failure', 'cardiac failure', 'cardiomyopathy',
+                      'pulmonary edema', 'ventricular dysfunction'],
+            'A419': ['sepsis', 'septicemia', 'bacteremia', 'infection',
+                     'septic shock', 'organ dysfunction'],
+            'K8000': ['cholecystitis', 'gallbladder', 'biliary disease',
+                      'gallstone', 'cholelithiasis']
         }
 
-        self.concepts = core_concepts
+        for icd in target_icd_codes:
+            keywords = diagnosis_keywords.get(icd, [])
+
+            for cui, info in self.umls_concepts.items():
+                if cui in relevant_cuis:
+                    continue
+
+                terms_text = ' '.join([info['name']] + info.get('terms', [])).lower()
+
+                if any(kw in terms_text for kw in keywords):
+                    if self.semantic_validator.validate_concept(cui, icd):
+                        relevant_cuis.add(cui)
+
+                if len(relevant_cuis) >= target_concept_count:
+                    break
+
+            if len(relevant_cuis) >= target_concept_count:
+                break
+
+        print(f"  After expansion: {len(relevant_cuis)} concepts")
+
+        # Build final
+        for cui in list(relevant_cuis)[:target_concept_count]:
+            if cui in self.umls_concepts:
+                concept = self.umls_concepts[cui]
+                self.concepts[cui] = {
+                    'cui': cui,
+                    'name': concept['name'],
+                    'definition': concept.get('definition', ''),
+                    'terms': concept.get('terms', []),
+                    'semantic_types': concept.get('semantic_types', [])
+                }
+
+        print(f"✅ Final: {len(self.concepts)} concepts")
+        return self.concepts
+
+    def _get_icd_variants(self, code: str) -> List[str]:
+        variants = {code, code.replace('.', '')}
+        no_dots = code.replace('.', '')
+        if len(no_dots) >= 4:
+            variants.add(no_dots[:3] + '.' + no_dots[3:])
+        variants.add(no_dots[:3])
+        return list(variants)
 
     def get_concept_name(self, cui: str) -> str:
         """Get concept name by CUI"""
@@ -737,18 +910,30 @@ def render_comparison_ui():
 # ============================================================================
 @st.cache_resource
 def load_shifamind_model():
-    """Load trained ShifaMind model and dependencies"""
+    """Load trained ShifaMind model with full 150 UMLS concepts (same as 016.py)"""
 
-    print("📦 Loading model components...")
+    print("🏥 Loading ShifaMind with 150 UMLS concepts...")
+    print("⏱️  This takes ~2 minutes on first load, then cached")
 
-    # Initialize concept store
-    concept_store = ConceptStore()
+    # Step 1: Load UMLS
+    print("\n📂 Loading UMLS...")
+    umls_loader = FastUMLSLoader(UMLS_PATH)
+    umls_concepts = umls_loader.load_concepts(max_concepts=30000)
+    umls_concepts = umls_loader.load_definitions(umls_concepts)
 
-    # Load tokenizer and base model
+    # Step 2: Build 150 concept set
+    print("\n🔬 Building 150 concept set...")
+    target_icd_codes = list(TARGET_CODES.keys())
+    concept_store = Phase4ConceptStore(umls_concepts, umls_loader.icd10_to_cui)
+    concept_store.build_concept_set(target_icd_codes, target_concept_count=150)
+
+    # Step 3: Load Bio_ClinicalBERT
+    print("\n🧬 Loading Bio_ClinicalBERT...")
     tokenizer = AutoTokenizer.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
     base_model = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')
 
-    # Initialize model
+    # Step 4: Initialize model
+    print("\n🤖 Initializing model...")
     model = Phase4RevisedShifaMind(
         base_model=base_model,
         concept_store=concept_store,
@@ -756,53 +941,62 @@ def load_shifamind_model():
         fusion_layers=[9, 11]
     ).to(DEVICE)
 
-    # Load trained weights (full model checkpoint)
+    # Step 5: Load checkpoint
     checkpoint_path = 'stage4_joint_best_revised.pt'
     if os.path.exists(checkpoint_path):
         try:
             checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
 
-            print(f"📊 Checkpoint info:")
-            print(f"   Total checkpoint keys: {len(checkpoint)}")
+            print(f"\n📊 Checkpoint info:")
+            print(f"   Total keys: {len(checkpoint)}")
 
-            # Load checkpoint (strict=False allows partial loading)
             load_result = model.load_state_dict(checkpoint, strict=False)
 
             loaded_keys = len(checkpoint) - len(load_result.missing_keys)
-            print(f"✅ Loaded {loaded_keys}/{len(checkpoint)} weights from checkpoint")
+            print(f"✅ Loaded {loaded_keys}/{len(checkpoint)} weights")
 
             if load_result.missing_keys:
-                print(f"   ℹ️  Missing keys: {len(load_result.missing_keys)}")
+                print(f"   ℹ️  Missing: {len(load_result.missing_keys)}")
             if load_result.unexpected_keys:
-                print(f"   ℹ️  Unexpected keys: {len(load_result.unexpected_keys)}")
+                print(f"   ℹ️  Unexpected: {len(load_result.unexpected_keys)}")
 
         except Exception as e:
-            print(f"⚠️ Checkpoint loading error: {e}")
-            print("   Using pre-trained BERT weights only")
+            print(f"⚠️ Checkpoint error: {e}")
     else:
         print(f"⚠️ Checkpoint not found: {checkpoint_path}")
-        print("   Using pre-trained BERT weights only")
-        print("   💡 Demo will work but predictions may not be optimal")
 
-    # Create concept embeddings
-    concept_texts = [
-        f"{data['name']}: {data.get('definition', '')}"
-        for data in concept_store.concepts.values()
-    ]
+    # Step 6: Create concept embeddings (same as training)
+    print("\n🧬 Creating concept embeddings...")
+    concept_texts = []
+    for cui, info in concept_store.concepts.items():
+        text = f"{info['name']}."
+        if info['definition']:
+            text += f" {info['definition'][:150]}"
+        concept_texts.append(text)
 
+    batch_size = 32
+    all_embeddings = []
+
+    base_model.eval()
     with torch.no_grad():
-        encoded = tokenizer(
-            concept_texts,
-            max_length=64,
-            padding='max_length',
-            truncation=True,
-            return_tensors='pt'
-        ).to(DEVICE)
+        for i in range(0, len(concept_texts), batch_size):
+            batch = concept_texts[i:i+batch_size]
+            encodings = tokenizer(
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=128,
+                return_tensors='pt'
+            ).to(DEVICE)
 
-        outputs = base_model(**encoded)
-        concept_embeddings = outputs.last_hidden_state[:, 0, :]  # Keep on DEVICE
+            outputs = base_model(**encodings)
+            embeddings = outputs.last_hidden_state[:, 0, :]
+            all_embeddings.append(embeddings)
 
-    print("✅ Model loaded successfully")
+    concept_embeddings = torch.cat(all_embeddings, dim=0)
+    print(f"✅ Created embeddings: {concept_embeddings.shape}")
+
+    print("\n✅ Model loaded successfully with 150 concepts!")
 
     return concept_store, model, tokenizer, concept_embeddings
 
