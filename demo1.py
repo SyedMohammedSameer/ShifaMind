@@ -273,14 +273,14 @@ class DiagnosisConceptHead(nn.Module):
 class Phase4RevisedShifaMind(nn.Module):
     def __init__(self, base_model, concept_store, num_classes, fusion_layers=[9, 11]):
         super().__init__()
-        self.bert = base_model
-        self.num_layers = self.bert.config.num_hidden_layers
-        self.hidden_size = self.bert.config.hidden_size
+        self.base_model = base_model  # Changed from self.bert to match checkpoint
+        self.num_layers = self.base_model.config.num_hidden_layers
+        self.hidden_size = self.base_model.config.hidden_size
         self.fusion_layers = fusion_layers
         self.concept_store = concept_store
 
         # Freeze early BERT layers
-        for i, layer in enumerate(self.bert.encoder.layer):
+        for i, layer in enumerate(self.base_model.encoder.layer):
             if i < min(fusion_layers) - 2:
                 for param in layer.parameters():
                     param.requires_grad = False
@@ -308,12 +308,12 @@ class Phase4RevisedShifaMind(nn.Module):
         )
 
         # BERT forward with fusion
-        outputs = self.bert.embeddings(input_ids)
+        outputs = self.base_model.embeddings(input_ids)
         hidden_states = outputs
 
         attention_weights = {}
 
-        for i, layer in enumerate(self.bert.encoder.layer):
+        for i, layer in enumerate(self.base_model.encoder.layer):
             hidden_states = layer(hidden_states)[0]
 
             # Apply fusion at specified layers
@@ -756,35 +756,25 @@ def load_shifamind_model():
         fusion_layers=[9, 11]
     ).to(DEVICE)
 
-    # Load trained weights (only custom layers, not BERT base)
+    # Load trained weights (full model checkpoint)
     checkpoint_path = 'stage4_joint_best_revised.pt'
     if os.path.exists(checkpoint_path):
         try:
             checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
 
-            # Get model's current state dict keys
-            model_keys = set(model.state_dict().keys())
-            checkpoint_keys = set(checkpoint.keys())
-
-            # Find matching keys (excluding BERT base weights)
-            matching_keys = model_keys & checkpoint_keys
-            custom_layer_keys = [k for k in matching_keys if not k.startswith('bert.encoder.layer')
-                                 and not k.startswith('bert.embeddings')]
-
             print(f"📊 Checkpoint info:")
-            print(f"   Total checkpoint keys: {len(checkpoint_keys)}")
-            print(f"   Matching custom layer keys: {len(custom_layer_keys)}")
+            print(f"   Total checkpoint keys: {len(checkpoint)}")
 
-            if len(custom_layer_keys) > 0:
-                # Load only matching keys (allows partial loading)
-                load_result = model.load_state_dict(checkpoint, strict=False)
-                print(f"✅ Loaded {len(custom_layer_keys)} custom layer weights")
+            # Load checkpoint (strict=False allows partial loading)
+            load_result = model.load_state_dict(checkpoint, strict=False)
 
-                if load_result.missing_keys:
-                    print(f"   ℹ️  Missing keys: {len(load_result.missing_keys)} (expected for BERT base)")
-            else:
-                print(f"⚠️ No matching custom layers found in checkpoint")
-                print("   Using pre-trained BERT weights only")
+            loaded_keys = len(checkpoint) - len(load_result.missing_keys)
+            print(f"✅ Loaded {loaded_keys}/{len(checkpoint)} weights from checkpoint")
+
+            if load_result.missing_keys:
+                print(f"   ℹ️  Missing keys: {len(load_result.missing_keys)}")
+            if load_result.unexpected_keys:
+                print(f"   ℹ️  Unexpected keys: {len(load_result.unexpected_keys)}")
 
         except Exception as e:
             print(f"⚠️ Checkpoint loading error: {e}")
