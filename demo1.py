@@ -557,7 +557,7 @@ def predict_shifamind(
     tokenizer,
     clinical_note: str,
     concept_embeddings: torch.Tensor,
-    concept_store: ConceptStore,
+    concept_store: Phase4ConceptStore,
     threshold: float = 0.7
 ) -> Dict:
     """Run ShifaMind inference"""
