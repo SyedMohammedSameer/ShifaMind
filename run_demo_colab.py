@@ -20,7 +20,7 @@ print("="*70)
 
 # Install dependencies
 print("\n📦 Installing dependencies...")
-os.system('pip install -q streamlit pyngrok openai==1.12.0 torch transformers faiss-cpu')
+os.system('pip install -q streamlit pyngrok openai torch transformers faiss-cpu')
 
 # Check if Google Drive is already mounted
 print("\n📁 Checking Google Drive...")

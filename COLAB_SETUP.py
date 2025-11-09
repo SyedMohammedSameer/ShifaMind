@@ -16,7 +16,7 @@ drive.mount('/content/drive')
 
 # Install required packages
 print("📦 Installing dependencies...")
-!pip install -q streamlit pyngrok openai==1.12.0 torch transformers faiss-cpu
+!pip install -q streamlit pyngrok openai torch transformers faiss-cpu
 
 print("✅ Setup complete!")
 

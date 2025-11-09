@@ -22,7 +22,7 @@ IN_COLAB = 'google.colab' in sys.modules
 
 if IN_COLAB:
     print("🔧 Installing dependencies...")
-    os.system('pip install -q streamlit openai==1.12.0 torch transformers faiss-cpu')
+    os.system('pip install -q streamlit openai torch transformers faiss-cpu')
 
     from google.colab import drive
     drive.mount('/content/drive')
@@ -777,7 +777,7 @@ def load_shifamind_model():
         ).to(DEVICE)
 
         outputs = base_model(**encoded)
-        concept_embeddings = outputs.last_hidden_state[:, 0, :].cpu()
+        concept_embeddings = outputs.last_hidden_state[:, 0, :]  # Keep on DEVICE
 
     print("✅ Model loaded successfully")
 

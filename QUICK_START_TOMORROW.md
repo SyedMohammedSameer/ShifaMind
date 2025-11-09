@@ -26,7 +26,7 @@
 from google.colab import drive
 drive.mount('/content/drive')
 
-!pip install -q streamlit pyngrok openai==1.12.0 torch transformers faiss-cpu
+!pip install -q streamlit pyngrok openai torch transformers faiss-cpu
 ```
 Run it and authorize Google Drive access.
 
