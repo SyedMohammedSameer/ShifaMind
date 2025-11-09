@@ -341,6 +341,8 @@ def query_chatgpt(clinical_note: str, api_key: str) -> str:
     """Query ChatGPT for diagnosis"""
     try:
         from openai import OpenAI
+
+        # Initialize client (compatible with all versions)
         client = OpenAI(api_key=api_key)
 
         prompt = f"""You are a medical AI assistant. Analyze this clinical note and provide the most likely diagnosis.
@@ -362,8 +364,16 @@ Provide a concise diagnosis with brief reasoning (2-3 sentences max)."""
 
         return response.choices[0].message.content.strip()
 
+    except ImportError:
+        return "❌ Error: OpenAI library not installed. Run: pip install --upgrade openai"
     except Exception as e:
-        return f"❌ Error: {str(e)}\n\nPlease check your OpenAI API key."
+        error_msg = str(e)
+        if "api_key" in error_msg.lower() or "authentication" in error_msg.lower():
+            return f"❌ Error: Invalid API key. Please check your OpenAI API key.\n\nDetails: {error_msg}"
+        elif "proxies" in error_msg.lower():
+            return "❌ Error: OpenAI version conflict.\n\nFix: Run this in a Colab cell:\n!pip install --upgrade --force-reinstall openai\n\nThen restart the demo."
+        else:
+            return f"❌ Error: {error_msg}\n\nTry: pip install --upgrade openai"
 
 # ============================================================================
 # SHIFAMIND INFERENCE
@@ -751,15 +761,38 @@ def load_shifamind_model():
     if os.path.exists(checkpoint_path):
         try:
             checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
-            # Load only matching keys (allows partial loading)
-            model.load_state_dict(checkpoint, strict=False)
-            print(f"✅ Loaded checkpoint: {checkpoint_path}")
+
+            # Get model's current state dict keys
+            model_keys = set(model.state_dict().keys())
+            checkpoint_keys = set(checkpoint.keys())
+
+            # Find matching keys (excluding BERT base weights)
+            matching_keys = model_keys & checkpoint_keys
+            custom_layer_keys = [k for k in matching_keys if not k.startswith('bert.encoder.layer')
+                                 and not k.startswith('bert.embeddings')]
+
+            print(f"📊 Checkpoint info:")
+            print(f"   Total checkpoint keys: {len(checkpoint_keys)}")
+            print(f"   Matching custom layer keys: {len(custom_layer_keys)}")
+
+            if len(custom_layer_keys) > 0:
+                # Load only matching keys (allows partial loading)
+                load_result = model.load_state_dict(checkpoint, strict=False)
+                print(f"✅ Loaded {len(custom_layer_keys)} custom layer weights")
+
+                if load_result.missing_keys:
+                    print(f"   ℹ️  Missing keys: {len(load_result.missing_keys)} (expected for BERT base)")
+            else:
+                print(f"⚠️ No matching custom layers found in checkpoint")
+                print("   Using pre-trained BERT weights only")
+
         except Exception as e:
-            print(f"⚠️ Checkpoint loading issue: {e}")
+            print(f"⚠️ Checkpoint loading error: {e}")
             print("   Using pre-trained BERT weights only")
     else:
         print(f"⚠️ Checkpoint not found: {checkpoint_path}")
         print("   Using pre-trained BERT weights only")
+        print("   💡 Demo will work but predictions may not be optimal")
 
     # Create concept embeddings
     concept_texts = [
