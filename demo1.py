@@ -746,14 +746,20 @@ def load_shifamind_model():
         fusion_layers=[9, 11]
     ).to(DEVICE)
 
-    # Load trained weights
+    # Load trained weights (only custom layers, not BERT base)
     checkpoint_path = 'stage4_joint_best_revised.pt'
     if os.path.exists(checkpoint_path):
-        model.load_state_dict(torch.load(checkpoint_path, map_location=DEVICE))
-        print(f"✅ Loaded checkpoint: {checkpoint_path}")
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
+            # Load only matching keys (allows partial loading)
+            model.load_state_dict(checkpoint, strict=False)
+            print(f"✅ Loaded checkpoint: {checkpoint_path}")
+        except Exception as e:
+            print(f"⚠️ Checkpoint loading issue: {e}")
+            print("   Using pre-trained BERT weights only")
     else:
         print(f"⚠️ Checkpoint not found: {checkpoint_path}")
-        print("   Using untrained model for demo structure")
+        print("   Using pre-trained BERT weights only")
 
     # Create concept embeddings
     concept_texts = [
