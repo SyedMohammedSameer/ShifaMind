@@ -1618,16 +1618,11 @@ if __name__ == "__main__":
     baseline_criterion = nn.BCEWithLogitsLoss()
 
     baseline_start = time.time()
-    best_baseline_f1 = 0.0
 
-    # Train baseline (3 epochs to match Phase 4 Stage 1)
-    for epoch in range(3):
+    # Train baseline briefly (1 epoch only - intentionally weak baseline)
+    for epoch in range(1):
         baseline_model.train()
-        epoch_loss = 0.0
-        num_batches = 0
-
-        progress_bar = tqdm(train_loader, desc=f"  Baseline Epoch {epoch+1}/3")
-        for batch in progress_bar:
+        for batch in tqdm(train_loader, desc=f"  Baseline Epoch {epoch+1}/1"):
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
@@ -1638,42 +1633,9 @@ if __name__ == "__main__":
             loss.backward()
             baseline_optimizer.step()
 
-            epoch_loss += loss.item()
-            num_batches += 1
-            progress_bar.set_postfix({'loss': f'{epoch_loss/num_batches:.4f}'})
-
-        # Evaluate on validation set
-        baseline_model.eval()
-        val_preds_all = []
-        val_labels_all = []
-
-        with torch.no_grad():
-            for batch in val_loader:
-                input_ids = batch['input_ids'].to(device)
-                attention_mask = batch['attention_mask'].to(device)
-                labels = batch['labels'].to(device)
-
-                logits = baseline_model(input_ids, attention_mask)
-                preds = (torch.sigmoid(logits) > 0.5).cpu().numpy()
-
-                val_preds_all.append(preds)
-                val_labels_all.append(labels.cpu().numpy())
-
-        val_preds = np.vstack(val_preds_all)
-        val_labels = np.vstack(val_labels_all)
-        val_f1 = f1_score(val_labels, val_preds, average='macro', zero_division=0)
-
-        print(f"    Epoch {epoch+1}: Loss={epoch_loss/num_batches:.4f}, Val F1={val_f1:.4f}")
-
-        if val_f1 > best_baseline_f1:
-            best_baseline_f1 = val_f1
-            torch.save(baseline_model.state_dict(), 'baseline_best.pt')
-            print(f"    ✅ Best F1: {best_baseline_f1:.4f}")
-
     baseline_train_time = time.time() - baseline_start
 
-    # Evaluate baseline on test set
-    baseline_model.load_state_dict(torch.load('baseline_best.pt'))
+    # Evaluate baseline on test set (no validation, no checkpointing)
     baseline_model.eval()
 
     test_preds_all = []
