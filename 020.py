@@ -77,16 +77,16 @@ if torch.cuda.is_available():
     print(f"   Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
 # ============================================================================
-# CELL 2: DATA PATHS (Corrected!)
+# CELL 2: DATA PATHS (Corrected - mimic-iv-3.1 appears TWICE in path!)
 # ============================================================================
 BASE_PATH = Path('/content/drive/MyDrive/ShifaMind/01_Raw_Datasets/Extracted')
-MIMIC_BASE_PATH = BASE_PATH  # Base path WITHOUT mimic-iv-3.1
+MIMIC_PATH = BASE_PATH / 'mimic-iv-3.1'  # This matches 016.py exactly
 UMLS_PATH = BASE_PATH / 'umls-2025AA-metathesaurus-full/2025AA/META'
 ICD_PATH = BASE_PATH / 'icd10cm-CodesDescriptions-2024'
 NOTES_PATH = BASE_PATH / 'mimic-iv-note-2.2'
 
 print(f"\n📁 Data paths:")
-print(f"  MIMIC-IV Base: {MIMIC_BASE_PATH.exists()}")
+print(f"  MIMIC-IV: {MIMIC_PATH.exists()}")
 print(f"  UMLS: {UMLS_PATH.exists()}")
 print(f"  Notes: {NOTES_PATH.exists()}")
 
@@ -759,9 +759,9 @@ class ShifaMind020(nn.Module):
 class MIMICLoader:
     """Load MIMIC data with correct paths"""
 
-    def __init__(self, base_path: Path, notes_path: Path):
-        self.base_path = base_path
-        self.hosp_path = base_path / 'mimic-iv-3.1' / 'hosp'
+    def __init__(self, mimic_path: Path, notes_path: Path):
+        self.mimic_path = mimic_path
+        self.hosp_path = mimic_path / 'mimic-iv-3.1' / 'hosp'  # Path has mimic-iv-3.1 TWICE!
         self.notes_path = notes_path
 
     def load_diagnoses(self) -> pd.DataFrame:
@@ -787,7 +787,7 @@ class MIMICLoader:
 
         raise FileNotFoundError(f"Could not find discharge notes in: {possible_paths}")
 
-def load_expanded_mimic_data(base_path: Path,
+def load_expanded_mimic_data(mimic_path: Path,
                             notes_path: Path,
                             target_codes: List[str],
                             expanded_mapping: Dict,
@@ -796,7 +796,7 @@ def load_expanded_mimic_data(base_path: Path,
 
     print(f"\n📂 Loading MIMIC-IV with expanded codes...")
 
-    loader = MIMICLoader(base_path, notes_path)
+    loader = MIMICLoader(mimic_path, notes_path)
 
     # Load data
     df_diag = loader.load_diagnoses()
@@ -1369,7 +1369,7 @@ concepts = concept_store.build_expanded_concept_set(
 
 # Step 4: Load expanded MIMIC data
 df, target_codes = load_expanded_mimic_data(
-    base_path=MIMIC_BASE_PATH,
+    mimic_path=MIMIC_PATH,
     notes_path=NOTES_PATH,
     target_codes=target_codes,
     expanded_mapping=EXPANDED_ICD_MAPPING,
