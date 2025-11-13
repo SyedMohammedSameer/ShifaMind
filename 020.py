@@ -185,27 +185,33 @@ class EnhancedUMLSLoader:
                 code = parts[13]  # Source code
                 preferred_name = parts[14]
 
-                if lang != 'ENG' or cui in seen_cuis:
+                # CRITICAL: Filter by source vocabulary (like 016.py does!)
+                if lang != 'ENG':
+                    continue
+                if sab not in ['SNOMEDCT_US', 'ICD10CM', 'MSH', 'NCI']:
                     continue
 
-                if cui not in self.concepts:
-                    self.concepts[cui] = {
-                        'cui': cui,
-                        'name': preferred_name,
-                        'terms': [preferred_name],
-                        'semantic_types': [],
-                        'definition': ''
-                    }
-                    seen_cuis.add(cui)
-                    concept_count += 1
-                else:
-                    self.concepts[cui]['terms'].append(preferred_name)
-
-                # Build ICD-10-CM mappings (critical for concept selection!)
+                # Build ICD-10-CM mappings FIRST (before counting concepts)
                 if sab == 'ICD10CM' and code:
                     normalized_code = code.replace('.', '')
                     self.icd10_to_cui[normalized_code].append(cui)
                     self.cui_to_icd10[cui].append(normalized_code)
+
+                # Now track concept
+                if cui in seen_cuis:
+                    if cui in self.concepts:
+                        self.concepts[cui]['terms'].append(preferred_name)
+                    continue
+
+                self.concepts[cui] = {
+                    'cui': cui,
+                    'name': preferred_name,
+                    'terms': [preferred_name],
+                    'semantic_types': [],
+                    'definition': ''
+                }
+                seen_cuis.add(cui)
+                concept_count += 1
 
         print(f"  ✅ Loaded {len(self.concepts)} concepts")
         print(f"  ✅ ICD-10-CM mappings: {len(self.icd10_to_cui)} codes")
@@ -1352,7 +1358,7 @@ concept_store = EnhancedConceptStore(
 concepts = concept_store.build_expanded_concept_set(
     target_icd_codes=target_codes,
     expanded_mapping=EXPANDED_ICD_MAPPING,
-    target_concept_count=2000
+    target_concept_count=1000  # Reduced from 2000 to save memory
 )
 
 # Step 4: Load expanded MIMIC data
@@ -1426,9 +1432,9 @@ train_dataset = ShifaMindDataset(df_train, tokenizer, target_codes=target_codes)
 val_dataset = ShifaMindDataset(df_val, tokenizer, target_codes=target_codes)
 test_dataset = ShifaMindDataset(df_test, tokenizer, target_codes=target_codes)
 
-train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=2)
-val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False, num_workers=2)
-test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False, num_workers=2)
+train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True, num_workers=2)  # Reduced to avoid OOM
+val_loader = DataLoader(val_dataset, batch_size=2, shuffle=False, num_workers=2)
+test_loader = DataLoader(test_dataset, batch_size=2, shuffle=False, num_workers=2)
 
 # Step 10: Initialize model components
 print(f"\n🏗️  Initializing ShifaMind 020...")
@@ -1446,7 +1452,7 @@ model = ShifaMind020(
     concept_store=concept_store,
     concept_gnn=concept_gnn,
     num_classes=len(target_codes),
-    fusion_layers=[6, 9, 11]
+    fusion_layers=[9, 11]  # Reduced from 3 to 2 layers to save memory
 ).to(device)
 
 total_params = sum(p.numel() for p in model.parameters())
@@ -1465,7 +1471,7 @@ trainer = AdvancedTrainer(
     edge_index=edge_index,
     device=device,
     use_focal_loss=True,
-    gradient_accumulation_steps=4
+    gradient_accumulation_steps=8  # Increased to compensate for smaller batch (2*8=16 effective)
 )
 
 # Step 12: Train!
