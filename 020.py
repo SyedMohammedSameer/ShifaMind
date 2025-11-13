@@ -157,9 +157,11 @@ class EnhancedUMLSLoader:
         self.umls_path = umls_path
         self.concepts = {}
         self.relationships = defaultdict(list)
+        self.icd10_to_cui = defaultdict(list)  # ICD-10 to CUI mapping
+        self.cui_to_icd10 = defaultdict(list)  # CUI to ICD-10 mapping
 
     def load_concepts(self, max_concepts: int = 50000):
-        """Load concepts from MRCONSO"""
+        """Load concepts from MRCONSO and build ICD mappings"""
         print(f"\n📚 Loading UMLS concepts (max: {max_concepts})...")
 
         mrconso_file = self.umls_path / 'MRCONSO.RRF'
@@ -179,11 +181,12 @@ class EnhancedUMLSLoader:
 
                 cui = parts[0]
                 lang = parts[1]
+                sab = parts[11]  # Source vocabulary
+                code = parts[13]  # Source code
+                preferred_name = parts[14]
 
                 if lang != 'ENG' or cui in seen_cuis:
                     continue
-
-                preferred_name = parts[14]
 
                 if cui not in self.concepts:
                     self.concepts[cui] = {
@@ -198,7 +201,14 @@ class EnhancedUMLSLoader:
                 else:
                     self.concepts[cui]['terms'].append(preferred_name)
 
+                # Build ICD-10-CM mappings (critical for concept selection!)
+                if sab == 'ICD10CM' and code:
+                    normalized_code = code.replace('.', '')
+                    self.icd10_to_cui[normalized_code].append(cui)
+                    self.cui_to_icd10[cui].append(normalized_code)
+
         print(f"  ✅ Loaded {len(self.concepts)} concepts")
+        print(f"  ✅ ICD-10-CM mappings: {len(self.icd10_to_cui)} codes")
         return self.concepts
 
     def load_semantic_types(self):
@@ -277,32 +287,10 @@ class EnhancedUMLSLoader:
         print(f"  ✅ Added {def_count} definitions")
 
 # ============================================================================
-# CELL 5: ICD-TO-CUI MAPPING
+# CELL 5: ICD-TO-CUI MAPPING (Now handled in EnhancedUMLSLoader)
 # ============================================================================
-
-def load_icd_to_cui_mapping(umls_path: Path) -> Dict[str, List[str]]:
-    """Load ICD-10-CM to CUI mappings from UMLS"""
-    print(f"\n🔗 Loading ICD-10-CM to CUI mappings...")
-
-    mrmap_file = umls_path / 'MRMAP.RRF'
-    icd_to_cui = defaultdict(list)
-
-    with open(mrmap_file, 'r', encoding='utf-8', errors='ignore') as f:
-        for line in tqdm(f, desc="  Parsing MRMAP"):
-            parts = line.strip().split('|')
-            if len(parts) < 13:
-                continue
-
-            source_vocab = parts[2]
-            source_code = parts[3]
-            target_cui = parts[6]
-
-            if source_vocab == 'ICD10CM':
-                normalized_code = source_code.replace('.', '')
-                icd_to_cui[normalized_code].append(target_cui)
-
-    print(f"  ✅ Loaded {len(icd_to_cui)} ICD-10-CM mappings")
-    return dict(icd_to_cui)
+# NOTE: ICD-to-CUI mappings are now built directly from MRCONSO during concept loading
+# The MRMAP file has 0 entries, so this function is deprecated
 
 # ============================================================================
 # CELL 6: CONCEPT GRAPH BUILDER (For GNN)
@@ -1350,8 +1338,8 @@ umls_loader.load_semantic_types()
 umls_loader.load_relationships()
 umls_loader.load_definitions()
 
-# Step 2: Load ICD mappings
-icd_to_cui = load_icd_to_cui_mapping(UMLS_PATH)
+# Step 2: Load ICD descriptions (ICD mappings already loaded in step 1!)
+icd_to_cui = dict(umls_loader.icd10_to_cui)  # Use mappings from MRCONSO
 icd_descriptions = load_icd_descriptions_safe(ICD_PATH)
 
 # Step 3: Build expanded concept store
