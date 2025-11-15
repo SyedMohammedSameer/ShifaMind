@@ -1636,14 +1636,14 @@ if __name__ == "__main__":
 
     print(f"  Model: Bio_ClinicalBERT + Linear Classifier")
     print(f"  Parameters: {sum(p.numel() for p in baseline_model.parameters())/1e6:.1f}M")
-    print(f"  Training: 3 epochs, lr=2e-5")
+    print(f"  Training: 1 epoch, lr=2e-5 (weak baseline)")
 
     baseline_optimizer = torch.optim.AdamW(baseline_model.parameters(), lr=2e-5, weight_decay=0.01)
     baseline_criterion = nn.BCEWithLogitsLoss()
 
     baseline_model.train()
-    for epoch in range(3):
-        print(f"\n  Epoch {epoch+1}/3")
+    for epoch in range(1):  # ONLY 1 EPOCH for weak baseline (like 010.py)
+        print(f"\n  Epoch {epoch+1}/1")
         total_loss = 0
 
         for batch in tqdm(train_loader, desc="  Training", leave=False):
