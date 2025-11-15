@@ -1604,16 +1604,10 @@ class EvidenceSpanExtractor:
             return []
 
         # Aggregate attention weights across fusion layers
-        # attention_weights is a list of [num_heads, seq_len, num_concepts]
-        # Average across heads and layers: [seq_len, num_concepts]
-        aggregated_attention = []
-        for attn in attention_weights:
-            # attn: [num_heads, seq_len, num_concepts]
-            # Average over heads: [seq_len, num_concepts]
-            aggregated_attention.append(attn.mean(dim=0))
-
+        # attention_weights is a list of [seq_len, num_concepts] from fusion layers
+        # (already averaged over heads in EnhancedCrossAttention)
         # Average across layers: [seq_len, num_concepts]
-        aggregated_attention = torch.stack(aggregated_attention).mean(dim=0)
+        aggregated_attention = torch.stack(attention_weights).mean(dim=0)
 
         # Extract spans for each activated concept
         evidence_extractions = []
