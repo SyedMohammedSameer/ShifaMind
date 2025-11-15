@@ -1,29 +1,34 @@
 #!/usr/bin/env python3
 """
-ShifaMind FINAL SUBMISSION - Complete Baseline Comparison
-Colab Standalone Script
+ShifaMind: Concept-Enhanced Medical Diagnosis Prediction System
+Complete Baseline Comparison - Colab Standalone Script
 
 SYSTEM OVERVIEW:
 Medical diagnosis prediction using Bio_ClinicalBERT with concept-enhanced architecture
 
-BASELINE:
+BASELINE MODEL:
 - Bio_ClinicalBERT + Simple Linear Classifier
-- No concepts, no RAG, no cross-attention
-- Expected F1: ~0.70
+- Single-epoch training
+- No concept integration, no RAG, no cross-attention
+- Expected Macro F1: ~0.70
 
-FULL SYSTEM (016.py):
-- Diagnosis-conditional concept labeling (PMI-based)
-- 150 high-quality UMLS concepts
+SHIFAMIND SYSTEM (Full):
+- Diagnosis-conditional concept labeling using Pointwise Mutual Information (PMI)
+- 150 high-quality UMLS medical concepts
 - Multi-layer cross-attention fusion (layers 9, 11)
-- Diagnosis-aware RAG filtering
-- 4-stage training (diagnosis → pseudo-labels → concepts → joint)
-- Achieved F1: 0.7759 (+7.6% over baseline)
+- Diagnosis-aware Retrieval-Augmented Generation (RAG)
+- 4-stage training pipeline: diagnosis → pseudo-labels → concepts → joint
+- Target Macro F1: 0.7759 (+7.6% improvement over baseline)
 
 DATASET:
-- MIMIC-IV: 8604 discharge notes
-- 4 ICD-10 codes: J189 (pneumonia), I5023 (heart failure), A419 (sepsis), K8000 (cholecystitis)
+- MIMIC-IV: 8,604 discharge notes
+- 4 ICD-10 diagnosis codes:
+  • J189 - Pneumonia
+  • I5023 - Acute on chronic systolic heart failure
+  • A419 - Sepsis
+  • K8000 - Acute cholecystitis
 
-This script runs both baseline and full system for direct comparison.
+This script trains both baseline and full system for direct performance comparison.
 """
 
 # ============================================================================
@@ -86,7 +91,7 @@ print(f"  MIMIC-IV: {MIMIC_PATH.exists()}")
 print(f"  UMLS: {UMLS_PATH.exists()}")
 
 # ============================================================================
-# PHASE 4 REVISED: DIAGNOSIS-CONDITIONAL CONCEPT LABELER
+# DIAGNOSIS-CONDITIONAL CONCEPT LABELER
 # ============================================================================
 class DiagnosisConditionalLabeler:
     """
@@ -526,8 +531,8 @@ def prepare_dataset(df_diag, df_adm, df_notes, icd_descriptions,
 # ============================================================================
 # CONCEPT STORE
 # ============================================================================
-class Phase4ConceptStore:
-    """Optimized concept store - 150 high-quality concepts"""
+class ConceptStore:
+    """Medical concept store - 150 high-quality UMLS concepts"""
 
     def __init__(self, umls_concepts: Dict, icd_to_cui: Dict):
         self.umls_concepts = umls_concepts
@@ -540,7 +545,7 @@ class Phase4ConceptStore:
     def build_concept_set(self, target_icd_codes: List[str],
                          icd_descriptions: Dict[str, str],
                          target_concept_count: int = 150):
-        print(f"\n🔬 Building Phase 4 concept set (target: {target_concept_count})...")
+        print(f"\n🔬 Building medical concept set (target: {target_concept_count})...")
 
         relevant_cuis = set()
 
@@ -620,7 +625,7 @@ class Phase4ConceptStore:
         return list(variants)
 
     def create_concept_embeddings(self, tokenizer, model, device):
-        print("\n🧬 Creating Phase 4 concept embeddings...")
+        print("\n🧬 Creating concept embeddings...")
 
         concept_texts = []
         for cui, info in self.concepts.items():
@@ -654,7 +659,7 @@ class Phase4ConceptStore:
         return final_embeddings
 
 # ============================================================================
-# DIAGNOSIS-AWARE RAG (Keep from Phase 4 - it worked!)
+# DIAGNOSIS-AWARE RAG
 # ============================================================================
 class DiagnosisAwareRAG:
     """Two-stage RAG: predict diagnosis → filter docs → retrieve"""
@@ -821,7 +826,7 @@ class ClinicalDataset(Dataset):
         return item
 
 # ============================================================================
-# MODEL (Keep from Phase 4)
+# CROSS-ATTENTION MODULE
 # ============================================================================
 class EnhancedCrossAttention(nn.Module):
     def __init__(self, hidden_size, num_heads=8, dropout=0.1):
@@ -899,10 +904,10 @@ class BaselineModel(nn.Module):
         return {'logits': logits}
 
 # ============================================================================
-# FULL SYSTEM MODEL
+# SHIFAMIND MODEL
 # ============================================================================
-class Phase4RevisedShifaMind(nn.Module):
-    """Phase 4 Revised: With diagnosis-conditional concept labeling"""
+class ShifaMindModel(nn.Module):
+    """ShifaMind: Concept-enhanced medical diagnosis prediction model"""
 
     def __init__(self, base_model, concept_store, num_classes, fusion_layers=[9, 11]):
         super().__init__()
@@ -975,9 +980,9 @@ class Phase4RevisedShifaMind(nn.Module):
         }
 
 # ============================================================================
-# LOSS FUNCTIONS (Keep from Phase 4)
+# LOSS FUNCTIONS
 # ============================================================================
-class Phase4Loss(nn.Module):
+class ShifaMindLoss(nn.Module):
     def __init__(self, stage='diagnosis'):
         super().__init__()
         self.stage = stage
@@ -1040,9 +1045,9 @@ class Phase4Loss(nn.Module):
             }
 
 # ============================================================================
-# STAGED TRAINER (Updated for diagnosis-conditional labeling)
+# STAGED TRAINER
 # ============================================================================
-class Phase4RevisedTrainer:
+class ShifaMindTrainer:
     """Orchestrates 4-stage training with diagnosis-conditional labeling"""
 
     def __init__(self, model, train_loader, val_loader, test_loader,
@@ -1063,7 +1068,7 @@ class Phase4RevisedTrainer:
         print("="*70)
 
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.01)
-        criterion = Phase4Loss(stage='diagnosis')
+        criterion = ShifaMindLoss(stage='diagnosis')
 
         num_training_steps = epochs * len(self.train_loader)
         scheduler = get_linear_schedule_with_warmup(
@@ -1134,7 +1139,7 @@ class Phase4RevisedTrainer:
 
         labels = self.diagnosis_labeler.generate_dataset_labels(
             df_train,
-            cache_file='diagnosis_conditional_labels_phase4.pkl'
+            cache_file='diagnosis_conditional_labels_train.pkl'
         )
 
         return labels
@@ -1147,7 +1152,7 @@ class Phase4RevisedTrainer:
         self.train_loader.dataset.concept_labels = concept_labels
 
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.01)
-        criterion = Phase4Loss(stage='concepts')
+        criterion = ShifaMindLoss(stage='concepts')
 
         for epoch in range(epochs):
             print(f"\nEpoch {epoch+1}/{epochs}")
@@ -1201,7 +1206,7 @@ class Phase4RevisedTrainer:
         print("="*70)
 
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.01)
-        criterion = Phase4Loss(stage='joint')
+        criterion = ShifaMindLoss(stage='joint')
 
         num_training_steps = epochs * len(self.train_loader)
         scheduler = get_linear_schedule_with_warmup(
@@ -1389,98 +1394,99 @@ def evaluate_final(model, dataloader, concept_embeddings, concept_labels_test,
 # ============================================================================
 # VISUALIZATION
 # ============================================================================
-def plot_phase4_revised_results(phase3_metrics, phase4_metrics, target_codes):
+def plot_comparison_results(baseline_metrics, system_metrics, target_codes):
+    """Compare Baseline vs ShifaMind System"""
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
     # Overall metrics
     metrics = ['Macro F1', 'Micro F1', 'AUROC']
-    phase3_vals = [
-        phase3_metrics['macro_f1'],
-        phase3_metrics['micro_f1'],
-        phase3_metrics.get('macro_auc', 0)
+    baseline_vals = [
+        baseline_metrics['macro_f1'],
+        baseline_metrics['micro_f1'],
+        baseline_metrics.get('macro_auc', 0)
     ]
-    phase4_vals = [
-        phase4_metrics['macro_f1'],
-        phase4_metrics['micro_f1'],
-        phase4_metrics.get('macro_auc', 0)
+    system_vals = [
+        system_metrics['macro_f1'],
+        system_metrics['micro_f1'],
+        system_metrics.get('macro_auc', 0)
     ]
 
     x = np.arange(len(metrics))
     width = 0.35
 
-    axes[0, 0].bar(x - width/2, phase3_vals, width, label='Phase 3', alpha=0.8, color='red')
-    axes[0, 0].bar(x + width/2, phase4_vals, width, label='Phase 4 Revised', alpha=0.8, color='green')
-    axes[0, 0].set_ylabel('Score')
-    axes[0, 0].set_title('Overall Performance')
+    axes[0, 0].bar(x - width/2, baseline_vals, width, label='Baseline', alpha=0.8, color='#E74C3C')
+    axes[0, 0].bar(x + width/2, system_vals, width, label='ShifaMind', alpha=0.8, color='#27AE60')
+    axes[0, 0].set_ylabel('Score', fontsize=11)
+    axes[0, 0].set_title('Overall Performance Comparison', fontsize=12, fontweight='bold')
     axes[0, 0].set_xticks(x)
     axes[0, 0].set_xticklabels(metrics)
-    axes[0, 0].legend()
+    axes[0, 0].legend(fontsize=10)
     axes[0, 0].grid(True, alpha=0.3)
     axes[0, 0].set_ylim([0, 1])
 
     # Per-class F1
-    phase3_per_class = phase3_metrics['per_class_f1']
-    phase4_per_class = phase4_metrics['per_class_f1']
+    baseline_per_class = baseline_metrics['per_class_f1']
+    system_per_class = system_metrics['per_class_f1']
 
     x = np.arange(len(target_codes))
-    axes[0, 1].bar(x - width/2, phase3_per_class, width, label='Phase 3', alpha=0.8, color='red')
-    axes[0, 1].bar(x + width/2, phase4_per_class, width, label='Phase 4 Revised', alpha=0.8, color='green')
-    axes[0, 1].set_xlabel('ICD-10 Code')
-    axes[0, 1].set_ylabel('F1 Score')
-    axes[0, 1].set_title('Per-Class F1 Score')
+    axes[0, 1].bar(x - width/2, baseline_per_class, width, label='Baseline', alpha=0.8, color='#E74C3C')
+    axes[0, 1].bar(x + width/2, system_per_class, width, label='ShifaMind', alpha=0.8, color='#27AE60')
+    axes[0, 1].set_xlabel('ICD-10 Code', fontsize=11)
+    axes[0, 1].set_ylabel('F1 Score', fontsize=11)
+    axes[0, 1].set_title('Per-Diagnosis F1 Score', fontsize=12, fontweight='bold')
     axes[0, 1].set_xticks(x)
     axes[0, 1].set_xticklabels(target_codes, rotation=45)
-    axes[0, 1].legend()
+    axes[0, 1].legend(fontsize=10)
     axes[0, 1].grid(True, alpha=0.3)
     axes[0, 1].set_ylim([0, 1])
 
-    # Concept metrics
-    concept_metrics_names = ['Avg Concepts', 'Concept\nPrecision']
-    phase3_concept = [
-        phase3_metrics.get('avg_concepts_activated', 24.6) / 30,
-        phase3_metrics.get('concept_precision', 0.30)
-    ]
-    phase4_concept = [
-        phase4_metrics.get('avg_concepts', 10) / 30,
-        phase4_metrics.get('concept_precision', 0.75)
-    ]
+    # Concept activation comparison
+    baseline_concepts = 0  # Baseline has no concepts
+    system_concepts = system_metrics.get('avg_concepts', 10)
 
-    x = np.arange(len(concept_metrics_names))
-    axes[1, 0].bar(x - width/2, phase3_concept, width, label='Phase 3', alpha=0.8, color='red')
-    axes[1, 0].bar(x + width/2, phase4_concept, width, label='Phase 4 Revised', alpha=0.8, color='green')
-    axes[1, 0].set_ylabel('Normalized Score')
-    axes[1, 0].set_title('Concept Selection Quality')
-    axes[1, 0].set_xticks(x)
-    axes[1, 0].set_xticklabels(concept_metrics_names)
-    axes[1, 0].legend()
-    axes[1, 0].grid(True, alpha=0.3)
-    axes[1, 0].set_ylim([0, 1])
+    concept_data = ['Baseline\n(No Concepts)', f'ShifaMind\n({system_concepts:.1f} concepts)']
+    concept_vals = [0, system_concepts]
+
+    axes[1, 0].bar([0, 1], concept_vals, width=0.5, alpha=0.8, color=['#E74C3C', '#27AE60'])
+    axes[1, 0].set_ylabel('Avg Concepts Activated', fontsize=11)
+    axes[1, 0].set_title('Concept Enhancement', fontsize=12, fontweight='bold')
+    axes[1, 0].set_xticks([0, 1])
+    axes[1, 0].set_xticklabels(concept_data)
+    axes[1, 0].grid(True, alpha=0.3, axis='y')
+    axes[1, 0].set_ylim([0, max(system_concepts * 1.2, 15)])
 
     # Summary
     axes[1, 1].axis('off')
+
+    improvement = system_metrics['macro_f1'] - baseline_metrics['macro_f1']
+    pct_improvement = (improvement / baseline_metrics['macro_f1']) * 100
+
     summary_text = f"""
-PHASE 4 REVISED RESULTS:
+SHIFAMIND SYSTEM RESULTS
 
-✅ Diagnosis Performance:
-  F1: {phase3_metrics['macro_f1']:.4f} → {phase4_metrics['macro_f1']:.4f}
-  Change: {phase4_metrics['macro_f1'] - phase3_metrics['macro_f1']:+.4f}
+📊 Overall Performance:
+  Baseline:     {baseline_metrics['macro_f1']:.4f}
+  ShifaMind:    {system_metrics['macro_f1']:.4f}
+  Improvement:  {improvement:+.4f} ({pct_improvement:+.1f}%)
 
-✅ Concept Selection:
-  Activated: {phase3_metrics.get('avg_concepts_activated', 24.6):.1f} → {phase4_metrics.get('avg_concepts', 10):.1f}
-  Precision: {phase3_metrics.get('concept_precision', 0.30):.1%} → {phase4_metrics.get('concept_precision', 0.75):.1%}
+🔬 Concept-Enhanced Architecture:
+  Concepts:     150 UMLS medical concepts
+  Activation:   {system_metrics.get('avg_concepts', 10):.1f} per sample
+  Precision:    {system_metrics.get('concept_precision', 0.75):.1%}
 
-🎯 Improvements:
-  • Diagnosis-conditional labeling
-  • PMI-based concept selection
-  • Reliable 10-12 concepts/sample
-  • 75-85% precision target
+🎯 Key Features:
+  • Diagnosis-conditional labeling (PMI)
+  • Multi-layer cross-attention fusion
+  • Diagnosis-aware RAG filtering
+  • 4-stage training pipeline
+  • Bio_ClinicalBERT backbone
 """
-    axes[1, 1].text(0.1, 0.5, summary_text, fontsize=10, family='monospace',
+    axes[1, 1].text(0.05, 0.5, summary_text, fontsize=10, family='monospace',
                    verticalalignment='center')
 
     plt.tight_layout()
-    plt.savefig('phase4_revised_results.png', dpi=300, bbox_inches='tight')
-    print("\n✅ Saved: phase4_revised_results.png")
+    plt.savefig('shifamind_results.png', dpi=300, bbox_inches='tight')
+    print("\n✅ Saved: shifamind_results.png")
     plt.show()
 
 # ============================================================================
@@ -1521,7 +1527,7 @@ if __name__ == "__main__":
     print("BUILDING CONCEPT STORE (150 CONCEPTS)")
     print("="*70)
 
-    concept_store = Phase4ConceptStore(
+    concept_store = ConceptStore(
         umls_concepts,
         umls_loader.icd10_to_cui
     )
@@ -1612,16 +1618,6 @@ if __name__ == "__main__":
     val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False)
 
-    # Phase 3 results for comparison
-    phase3_results = {
-        'macro_f1': 0.7734,
-        'micro_f1': 0.7571,
-        'per_class_f1': np.array([0.7044, 0.8279, 0.7177, 0.8438]),
-        'macro_auc': 0.87,
-        'avg_concepts_activated': 24.6,
-        'concept_precision': 0.30
-    }
-
     # ========================================================================
     # TRAIN BASELINE MODEL
     # ========================================================================
@@ -1707,7 +1703,7 @@ if __name__ == "__main__":
     # Initialize model
     print("\n🔧 Initializing full system model...")
 
-    model = Phase4RevisedShifaMind(
+    model = ShifaMindModel(
         base_model=AutoModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT").to(device),
         concept_store=concept_store,
         num_classes=len(target_codes),
@@ -1719,14 +1715,14 @@ if __name__ == "__main__":
     print(f"  Parameters: {sum(p.numel() for p in model.parameters())/1e6:.1f}M")
 
     # Initialize trainer
-    trainer = Phase4RevisedTrainer(
+    trainer = ShifaMindTrainer(
         model, train_loader, val_loader, test_loader,
         concept_embeddings, diagnosis_labeler, device
     )
 
     # STAGED TRAINING
     print("\n" + "="*70)
-    print("PHASE 4 REVISED STAGED TRAINING")
+    print("4-STAGE TRAINING PIPELINE")
     print("="*70)
 
     total_start = time.time()
@@ -1793,7 +1789,7 @@ if __name__ == "__main__":
 
     # Visualization
     print("\n📊 Creating visualizations...")
-    plot_phase4_revised_results(baseline_metrics, final_metrics, target_codes)
+    plot_comparison_results(baseline_metrics, final_metrics, target_codes)
 
     # Training history
     print("\n📈 Training History:")
@@ -1810,8 +1806,9 @@ if __name__ == "__main__":
     print("  - stage1_diagnosis_revised.pt")
     print("  - stage3_concepts_revised.pt")
     print("  - stage4_joint_best_revised.pt")
-    print("  - diagnosis_conditional_labels_phase4.pkl")
-    print("  - phase4_revised_results.png")
+    print("  - diagnosis_conditional_labels_train.pkl")
+    print("  - diagnosis_conditional_labels_test.pkl")
+    print("  - shifamind_results.png")
 
     print("\n" + "="*70)
     print("✅ SHIFAMIND TRAINING COMPLETE!")
