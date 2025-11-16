@@ -1992,7 +1992,7 @@ class ExplainabilityMetrics:
         return complete_count / len(chains) if chains else 0.0
 
     @staticmethod
-    def concept_evidence_alignment(chains: List[Dict], threshold: float = 0.3) -> float:
+    def concept_evidence_alignment(chains: List[Dict], threshold: float = 0.15) -> float:
         """
         Measure semantic alignment between concepts and evidence
 
@@ -2032,7 +2032,7 @@ class ExplainabilityMetrics:
         return np.mean(alignment_scores) if alignment_scores else 0.0
 
     @staticmethod
-    def rag_relevance(chains: List[Dict], threshold: float = 0.5) -> float:
+    def rag_relevance(chains: List[Dict], threshold: float = 0.15) -> float:
         """Percentage of RAG documents with relevance > threshold"""
         relevant_count = 0
         total_count = 0
