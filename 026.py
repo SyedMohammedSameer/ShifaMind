@@ -9,7 +9,7 @@ and interpretable evidence extraction from clinical text.
 
 SHIFAMIND SYSTEM:
 - Diagnosis-conditional concept labeling using Pointwise Mutual Information (PMI)
-- 150 high-quality UMLS medical concepts
+- High-quality UMLS medical concepts (filtered to only those with training data)
 - Multi-layer cross-attention fusion (layers 9, 11)
 - Diagnosis-aware Retrieval-Augmented Generation (RAG)
 - 4-stage training pipeline: diagnosis → pseudo-labels → concepts → joint
@@ -259,6 +259,13 @@ class DiagnosisConditionalLabeler:
                     self.pmi_scores[key] = pmi
 
         print(f"  ✅ Computed {len(self.pmi_scores)} significant PMI scores")
+
+        # Return unique concepts that have PMI scores
+        concepts_with_pmi = set()
+        for (dx_code, concept_cui) in self.pmi_scores.keys():
+            concepts_with_pmi.add(concept_cui)
+
+        return concepts_with_pmi
 
     def generate_labels(self, diagnosis_codes: List[str], verbose=False) -> List[int]:
         """
@@ -699,6 +706,25 @@ class ConceptStore:
         print(f"  ✅ Created embeddings: {final_embeddings.shape}")
 
         return final_embeddings
+
+    def filter_to_concepts_with_pmi(self, valid_cuis: Set[str]):
+        """Filter concept store to only include concepts with PMI scores"""
+        print(f"\n🔍 Filtering concepts to those with PMI scores...")
+        print(f"  Before: {len(self.concepts)} concepts")
+
+        # Filter concepts
+        filtered_concepts = {cui: info for cui, info in self.concepts.items() if cui in valid_cuis}
+
+        # Update concept store
+        self.concepts = filtered_concepts
+
+        # Rebuild indices
+        concept_list = list(self.concepts.keys())
+        self.concept_to_idx = {cui: i for i, cui in enumerate(concept_list)}
+        self.idx_to_concept = {i: cui for i, cui in enumerate(concept_list)}
+
+        print(f"  After: {len(self.concepts)} concepts")
+        print(f"  ✅ Filtered to {len(self.concepts)} concepts with training data")
 
 # ============================================================================
 # DIAGNOSIS-AWARE RAG
@@ -1797,7 +1823,10 @@ if __name__ == "__main__":
     )
 
     # Build co-occurrence statistics
-    diagnosis_labeler.build_cooccurrence_statistics(df_train, target_codes)
+    concepts_with_pmi = diagnosis_labeler.build_cooccurrence_statistics(df_train, target_codes)
+
+    # Filter concept store to only concepts with PMI scores (removes noise)
+    concept_store.filter_to_concepts_with_pmi(concepts_with_pmi)
 
     # Load model
     print("\n" + "="*70)
