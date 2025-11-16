@@ -99,6 +99,131 @@ print(f"  UMLS: {UMLS_PATH.exists()}")
 # INFRASTRUCTURE FROM 026.py
 # ============================================================================
 
+class DiagnosisConditionalLabeler:
+    """
+    Generate concept labels based on diagnosis-concept co-occurrence
+
+    Uses Pointwise Mutual Information (PMI) to find concepts that
+    frequently co-occur with specific diagnoses in training data.
+    """
+
+    def __init__(self, concept_store, icd_to_cui, pmi_threshold=1.0):
+        self.concept_store = concept_store
+        self.icd_to_cui = icd_to_cui
+        self.pmi_threshold = pmi_threshold
+
+        # Co-occurrence statistics
+        self.diagnosis_counts = defaultdict(int)
+        self.concept_counts = defaultdict(int)
+        self.diagnosis_concept_counts = defaultdict(lambda: defaultdict(int))
+        self.total_pairs = 0
+
+        # PMI scores
+        self.pmi_scores = {}
+
+        print(f"\n🏷️  Initializing Diagnosis-Conditional Labeler...")
+        print(f"  PMI Threshold: {pmi_threshold}")
+        print(f"  Concepts: {len(concept_store.concepts)}")
+
+    def build_cooccurrence_statistics(self, df_train, target_codes):
+        """Build diagnosis-concept co-occurrence from training data"""
+        print("\n📊 Building diagnosis-concept co-occurrence statistics...")
+
+        # Get all ICD codes from training data
+        all_icd_codes = []
+        for codes in df_train['icd_codes']:
+            all_icd_codes.extend(codes)
+
+        print(f"  Total diagnosis instances: {len(all_icd_codes)}")
+
+        # Build co-occurrence matrix
+        samples_processed = 0
+
+        for idx, row in tqdm(df_train.iterrows(), total=len(df_train), desc="  Processing"):
+            diagnosis_codes = row['icd_codes']
+
+            # Get concepts for each diagnosis via ICD mapping
+            note_concepts = set()
+
+            for dx_code in diagnosis_codes:
+                # Count diagnosis
+                self.diagnosis_counts[dx_code] += 1
+
+                # Get concepts mapped to this diagnosis
+                dx_variants = self._get_icd_variants(dx_code)
+                for variant in dx_variants:
+                    if variant in self.icd_to_cui:
+                        cuis = self.icd_to_cui[variant]
+                        # Only use concepts in our concept store
+                        valid_cuis = [cui for cui in cuis if cui in self.concept_store.concepts]
+                        note_concepts.update(valid_cuis)
+
+            # Count concept occurrences and co-occurrences
+            for concept_cui in note_concepts:
+                self.concept_counts[concept_cui] += 1
+
+                # Co-occurrence with each diagnosis in this note
+                for dx_code in diagnosis_codes:
+                    self.diagnosis_concept_counts[dx_code][concept_cui] += 1
+                    self.total_pairs += 1
+
+            samples_processed += 1
+
+        print(f"  ✅ Processed {samples_processed} samples")
+        print(f"  Unique diagnoses: {len(self.diagnosis_counts)}")
+        print(f"  Unique concepts: {len(self.concept_counts)}")
+        print(f"  Total co-occurrences: {self.total_pairs}")
+
+        # Compute PMI scores
+        return self._compute_pmi_scores()
+
+    def _compute_pmi_scores(self):
+        """Compute Pointwise Mutual Information (PMI) scores"""
+        print("\n  Computing PMI scores...")
+
+        total_diagnoses = sum(self.diagnosis_counts.values())
+        total_concepts = sum(self.concept_counts.values())
+
+        for dx_code in tqdm(self.diagnosis_counts.keys(), desc="  PMI"):
+            p_dx = self.diagnosis_counts[dx_code] / total_diagnoses
+
+            for concept_cui in self.concept_counts.keys():
+                # Joint probability
+                cooccur_count = self.diagnosis_concept_counts[dx_code].get(concept_cui, 0)
+                if cooccur_count == 0:
+                    continue
+
+                p_dx_concept = cooccur_count / self.total_pairs
+
+                # Marginal probabilities
+                p_concept = self.concept_counts[concept_cui] / total_concepts
+
+                # PMI
+                pmi = math.log(p_dx_concept / (p_dx * p_concept + 1e-10) + 1e-10)
+
+                # Store if significant
+                if pmi > self.pmi_threshold:
+                    key = (dx_code, concept_cui)
+                    self.pmi_scores[key] = pmi
+
+        print(f"  ✅ Computed {len(self.pmi_scores)} significant PMI scores")
+
+        # Return unique concepts that have PMI scores
+        concepts_with_pmi = set()
+        for (dx_code, concept_cui) in self.pmi_scores.keys():
+            concepts_with_pmi.add(concept_cui)
+
+        return concepts_with_pmi
+
+    def _get_icd_variants(self, code: str) -> List[str]:
+        """Get ICD code variants for matching"""
+        variants = {code, code.replace('.', '')}
+        no_dots = code.replace('.', '')
+        if len(no_dots) >= 4:
+            variants.add(no_dots[:3] + '.' + no_dots[3:])
+        variants.add(no_dots[:3])
+        return list(variants)
+
 class SemanticTypeValidator:
     """Filters concepts by clinical relevance"""
     RELEVANT_TYPES = {
@@ -401,6 +526,25 @@ class ConceptStore:
         final_embeddings = torch.cat(all_embeddings, dim=0).to(device)
         print(f"  ✅ Created embeddings: {final_embeddings.shape}")
         return final_embeddings
+
+    def filter_to_concepts_with_pmi(self, valid_cuis: Set[str]):
+        """Filter concept store to only include concepts with PMI scores"""
+        print(f"\n🔍 Filtering concepts to those with PMI scores...")
+        print(f"  Before: {len(self.concepts)} concepts")
+
+        # Filter concepts
+        filtered_concepts = {cui: info for cui, info in self.concepts.items() if cui in valid_cuis}
+
+        # Update concept store
+        self.concepts = filtered_concepts
+
+        # Rebuild indices
+        concept_list = list(self.concepts.keys())
+        self.concept_to_idx = {cui: i for i, cui in enumerate(concept_list)}
+        self.idx_to_concept = {i: cui for i, cui in enumerate(concept_list)}
+
+        print(f"  After: {len(self.concepts)} concepts")
+        print(f"  ✅ Filtered to {len(self.concepts)} concepts with training data")
 
 class DiagnosisAwareRAG:
     """Two-stage RAG: predict diagnosis → filter docs → retrieve"""
@@ -1244,6 +1388,23 @@ if __name__ == "__main__":
     concept_set = concept_store.build_concept_set(
         target_codes, icd10_descriptions, target_concept_count=150
     )
+
+    # Apply PMI filtering (same as 026.py)
+    print("\n" + "="*70)
+    print("APPLYING PMI FILTERING")
+    print("="*70)
+
+    diagnosis_labeler = DiagnosisConditionalLabeler(
+        concept_store,
+        umls_loader.icd10_to_cui,
+        pmi_threshold=1.0
+    )
+
+    # Build co-occurrence statistics
+    concepts_with_pmi = diagnosis_labeler.build_cooccurrence_statistics(df_train, target_codes)
+
+    # Filter concept store to only concepts with PMI scores (matches trained model)
+    concept_store.filter_to_concepts_with_pmi(concepts_with_pmi)
 
     # Load model
     print("\n" + "="*70)
