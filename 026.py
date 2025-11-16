@@ -220,7 +220,7 @@ class DiagnosisConditionalLabeler:
         print(f"  Total co-occurrences: {self.total_pairs}")
 
         # Compute PMI scores
-        self._compute_pmi_scores()
+        return self._compute_pmi_scores()
 
     def _compute_pmi_scores(self):
         """
