@@ -1389,22 +1389,26 @@ if __name__ == "__main__":
         target_codes, icd10_descriptions, target_concept_count=150
     )
 
-    # Apply PMI filtering (same as 026.py)
+    # Load filtered concepts from 026.py (ensures exact match with trained model)
     print("\n" + "="*70)
-    print("APPLYING PMI FILTERING")
+    print("LOADING FILTERED CONCEPTS FROM 026.py")
     print("="*70)
 
-    diagnosis_labeler = DiagnosisConditionalLabeler(
-        concept_store,
-        umls_loader.icd10_to_cui,
-        pmi_threshold=1.0
-    )
+    filtered_concepts_file = 'filtered_concepts_038.pkl'
+    if not os.path.exists(filtered_concepts_file):
+        print(f"\n⚠️  Filtered concepts not found: {filtered_concepts_file}")
+        print("    Please run 026.py first to generate filtered concepts")
+        print("    026.py will create filtered_concepts_038.pkl with the exact 38 concepts used in training")
+        sys.exit(1)
 
-    # Build co-occurrence statistics
-    concepts_with_pmi = diagnosis_labeler.build_cooccurrence_statistics(df_train, target_codes)
+    print(f"\n📦 Loading filtered concepts from: {filtered_concepts_file}")
+    with open(filtered_concepts_file, 'rb') as f:
+        filtered_concept_cuis = pickle.load(f)
 
-    # Filter concept store to only concepts with PMI scores (matches trained model)
-    concept_store.filter_to_concepts_with_pmi(concepts_with_pmi)
+    print(f"  ✅ Loaded {len(filtered_concept_cuis)} filtered concepts")
+
+    # Filter concept store to match trained model (no PMI recomputation)
+    concept_store.filter_to_concepts_with_pmi(set(filtered_concept_cuis))
 
     # Load model
     print("\n" + "="*70)
