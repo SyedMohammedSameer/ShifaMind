@@ -1328,7 +1328,14 @@ class ShifaMindTrainer:
 
             if val_metrics['macro_f1'] > best_f1:
                 best_f1 = val_metrics['macro_f1']
-                torch.save(self.model.state_dict(), 'stage4_joint_best_revised.pt')
+                # Save model with concept metadata for standalone loading
+                checkpoint = {
+                    'model_state_dict': self.model.state_dict(),
+                    'concept_cuis': list(self.model.concept_store.concepts.keys()),
+                    'num_concepts': len(self.model.concept_store.concepts),
+                    'f1_score': best_f1
+                }
+                torch.save(checkpoint, 'stage4_joint_best_revised.pt')
                 print(f"  ✅ Best F1: {best_f1:.4f}")
 
             self.history.append({
@@ -1828,12 +1835,6 @@ if __name__ == "__main__":
     # Filter concept store to only concepts with PMI scores (removes noise)
     concept_store.filter_to_concepts_with_pmi(concepts_with_pmi)
 
-    # Save filtered concept CUIs for reproducibility in 027.py
-    filtered_concepts_file = 'filtered_concepts_038.pkl'
-    with open(filtered_concepts_file, 'wb') as f:
-        pickle.dump(list(concept_store.concepts.keys()), f)
-    print(f"\n💾 Saved filtered concepts to: {filtered_concepts_file}")
-
     # Load model
     print("\n" + "="*70)
     print("LOADING BIO_CLINICALBERT")
@@ -2036,7 +2037,8 @@ if __name__ == "__main__":
     print("FINAL EVALUATION")
     print("="*70)
 
-    model.load_state_dict(torch.load('stage4_joint_best_revised.pt'))
+    checkpoint = torch.load('stage4_joint_best_revised.pt')
+    model.load_state_dict(checkpoint['model_state_dict'])
 
     final_metrics = evaluate_final(
         model, test_loader, concept_embeddings, test_concept_labels,
@@ -2087,10 +2089,9 @@ if __name__ == "__main__":
     print("\n💾 Saved artifacts:")
     print("  - stage1_diagnosis_revised.pt")
     print("  - stage3_concepts_revised.pt")
-    print("  - stage4_joint_best_revised.pt")
+    print("  - stage4_joint_best_revised.pt (includes concept metadata)")
     print("  - diagnosis_conditional_labels_train.pkl")
     print("  - diagnosis_conditional_labels_test.pkl")
-    print("  - filtered_concepts_038.pkl")
     print("  - shifamind_results.png")
 
     print("\n" + "="*70)

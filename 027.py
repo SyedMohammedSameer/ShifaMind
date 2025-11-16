@@ -99,131 +99,6 @@ print(f"  UMLS: {UMLS_PATH.exists()}")
 # INFRASTRUCTURE FROM 026.py
 # ============================================================================
 
-class DiagnosisConditionalLabeler:
-    """
-    Generate concept labels based on diagnosis-concept co-occurrence
-
-    Uses Pointwise Mutual Information (PMI) to find concepts that
-    frequently co-occur with specific diagnoses in training data.
-    """
-
-    def __init__(self, concept_store, icd_to_cui, pmi_threshold=1.0):
-        self.concept_store = concept_store
-        self.icd_to_cui = icd_to_cui
-        self.pmi_threshold = pmi_threshold
-
-        # Co-occurrence statistics
-        self.diagnosis_counts = defaultdict(int)
-        self.concept_counts = defaultdict(int)
-        self.diagnosis_concept_counts = defaultdict(lambda: defaultdict(int))
-        self.total_pairs = 0
-
-        # PMI scores
-        self.pmi_scores = {}
-
-        print(f"\n🏷️  Initializing Diagnosis-Conditional Labeler...")
-        print(f"  PMI Threshold: {pmi_threshold}")
-        print(f"  Concepts: {len(concept_store.concepts)}")
-
-    def build_cooccurrence_statistics(self, df_train, target_codes):
-        """Build diagnosis-concept co-occurrence from training data"""
-        print("\n📊 Building diagnosis-concept co-occurrence statistics...")
-
-        # Get all ICD codes from training data
-        all_icd_codes = []
-        for codes in df_train['icd_codes']:
-            all_icd_codes.extend(codes)
-
-        print(f"  Total diagnosis instances: {len(all_icd_codes)}")
-
-        # Build co-occurrence matrix
-        samples_processed = 0
-
-        for idx, row in tqdm(df_train.iterrows(), total=len(df_train), desc="  Processing"):
-            diagnosis_codes = row['icd_codes']
-
-            # Get concepts for each diagnosis via ICD mapping
-            note_concepts = set()
-
-            for dx_code in diagnosis_codes:
-                # Count diagnosis
-                self.diagnosis_counts[dx_code] += 1
-
-                # Get concepts mapped to this diagnosis
-                dx_variants = self._get_icd_variants(dx_code)
-                for variant in dx_variants:
-                    if variant in self.icd_to_cui:
-                        cuis = self.icd_to_cui[variant]
-                        # Only use concepts in our concept store
-                        valid_cuis = [cui for cui in cuis if cui in self.concept_store.concepts]
-                        note_concepts.update(valid_cuis)
-
-            # Count concept occurrences and co-occurrences
-            for concept_cui in note_concepts:
-                self.concept_counts[concept_cui] += 1
-
-                # Co-occurrence with each diagnosis in this note
-                for dx_code in diagnosis_codes:
-                    self.diagnosis_concept_counts[dx_code][concept_cui] += 1
-                    self.total_pairs += 1
-
-            samples_processed += 1
-
-        print(f"  ✅ Processed {samples_processed} samples")
-        print(f"  Unique diagnoses: {len(self.diagnosis_counts)}")
-        print(f"  Unique concepts: {len(self.concept_counts)}")
-        print(f"  Total co-occurrences: {self.total_pairs}")
-
-        # Compute PMI scores
-        return self._compute_pmi_scores()
-
-    def _compute_pmi_scores(self):
-        """Compute Pointwise Mutual Information (PMI) scores"""
-        print("\n  Computing PMI scores...")
-
-        total_diagnoses = sum(self.diagnosis_counts.values())
-        total_concepts = sum(self.concept_counts.values())
-
-        for dx_code in tqdm(self.diagnosis_counts.keys(), desc="  PMI"):
-            p_dx = self.diagnosis_counts[dx_code] / total_diagnoses
-
-            for concept_cui in self.concept_counts.keys():
-                # Joint probability
-                cooccur_count = self.diagnosis_concept_counts[dx_code].get(concept_cui, 0)
-                if cooccur_count == 0:
-                    continue
-
-                p_dx_concept = cooccur_count / self.total_pairs
-
-                # Marginal probabilities
-                p_concept = self.concept_counts[concept_cui] / total_concepts
-
-                # PMI
-                pmi = math.log(p_dx_concept / (p_dx * p_concept + 1e-10) + 1e-10)
-
-                # Store if significant
-                if pmi > self.pmi_threshold:
-                    key = (dx_code, concept_cui)
-                    self.pmi_scores[key] = pmi
-
-        print(f"  ✅ Computed {len(self.pmi_scores)} significant PMI scores")
-
-        # Return unique concepts that have PMI scores
-        concepts_with_pmi = set()
-        for (dx_code, concept_cui) in self.pmi_scores.keys():
-            concepts_with_pmi.add(concept_cui)
-
-        return concepts_with_pmi
-
-    def _get_icd_variants(self, code: str) -> List[str]:
-        """Get ICD code variants for matching"""
-        variants = {code, code.replace('.', '')}
-        no_dots = code.replace('.', '')
-        if len(no_dots) >= 4:
-            variants.add(no_dots[:3] + '.' + no_dots[3:])
-        variants.add(no_dots[:3])
-        return list(variants)
-
 class SemanticTypeValidator:
     """Filters concepts by clinical relevance"""
     RELEVANT_TYPES = {
@@ -1389,41 +1264,45 @@ if __name__ == "__main__":
         target_codes, icd10_descriptions, target_concept_count=150
     )
 
-    # Load filtered concepts from 026.py (ensures exact match with trained model)
-    print("\n" + "="*70)
-    print("LOADING FILTERED CONCEPTS FROM 026.py")
-    print("="*70)
-
-    filtered_concepts_file = 'filtered_concepts_038.pkl'
-    if not os.path.exists(filtered_concepts_file):
-        print(f"\n⚠️  Filtered concepts not found: {filtered_concepts_file}")
-        print("    Please run 026.py first to generate filtered concepts")
-        print("    026.py will create filtered_concepts_038.pkl with the exact 38 concepts used in training")
-        sys.exit(1)
-
-    print(f"\n📦 Loading filtered concepts from: {filtered_concepts_file}")
-    with open(filtered_concepts_file, 'rb') as f:
-        filtered_concept_cuis = pickle.load(f)
-
-    print(f"  ✅ Loaded {len(filtered_concept_cuis)} filtered concepts")
-
-    # Filter concept store to match trained model (no PMI recomputation)
-    concept_store.filter_to_concepts_with_pmi(set(filtered_concept_cuis))
-
-    # Load model
+    # Load model checkpoint (includes concept metadata for standalone operation)
     print("\n" + "="*70)
     print("LOADING TRAINED MODEL")
     print("="*70)
 
+    model_path = 'stage4_joint_best_revised.pt'
+    if not os.path.exists(model_path):
+        print(f"\n⚠️  Model checkpoint not found: {model_path}")
+        print("    Please run 026.py first to train the model")
+        sys.exit(1)
+
+    print(f"\n📦 Loading checkpoint: {model_path}")
+    checkpoint = torch.load(model_path, map_location=device)
+
+    # Extract concept metadata from checkpoint
+    if 'concept_cuis' in checkpoint:
+        filtered_concept_cuis = checkpoint['concept_cuis']
+        print(f"  ✅ Loaded {len(filtered_concept_cuis)} concepts from checkpoint")
+        print(f"     Model F1 score: {checkpoint.get('f1_score', 0):.4f}")
+    else:
+        print(f"\n⚠️  Checkpoint missing concept metadata")
+        print("    This checkpoint was created with an older version of 026.py")
+        print("    Please retrain using the updated 026.py")
+        sys.exit(1)
+
+    # Filter concept store to match trained model
+    concept_store.filter_to_concepts_with_pmi(set(filtered_concept_cuis))
+
+    # Initialize BERT model
     model_name = "emilyalsentzer/Bio_ClinicalBERT"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     base_model = AutoModel.from_pretrained(model_name).to(device)
 
+    # Create concept embeddings for filtered concepts
     concept_embeddings = concept_store.create_concept_embeddings(
         tokenizer, base_model, device
     )
 
-    # Initialize model
+    # Initialize model with filtered concepts
     model = ShifaMindModel(
         base_model=AutoModel.from_pretrained(model_name).to(device),
         concept_store=concept_store,
@@ -1432,14 +1311,7 @@ if __name__ == "__main__":
     ).to(device)
 
     # Load trained weights
-    model_path = 'stage4_joint_best_revised.pt'
-    if not os.path.exists(model_path):
-        print(f"\n⚠️  Model weights not found: {model_path}")
-        print("    Please run 026.py first to train the model")
-        sys.exit(1)
-
-    print(f"\n📦 Loading model weights: {model_path}")
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     print("  ✅ Model loaded successfully")
 
