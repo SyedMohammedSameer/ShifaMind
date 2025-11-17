@@ -307,7 +307,18 @@ class DiagnosisConditionalLabeler:
         if os.path.exists(cache_file):
             print(f"\n📦 Loading cached labels from {cache_file}...")
             with open(cache_file, 'rb') as f:
-                return pickle.load(f)
+                cached_labels = pickle.load(f)
+
+            # Validate cache: check if concept count matches
+            expected_concepts = len(self.concept_store.concepts)
+            cached_concepts = cached_labels.shape[1] if len(cached_labels.shape) > 1 else 0
+
+            if cached_concepts != expected_concepts:
+                print(f"  ⚠️  Cache invalid: {cached_concepts} concepts in cache, {expected_concepts} in store")
+                print(f"  🔄 Regenerating labels...")
+            else:
+                print(f"  ✅ Cache valid: {cached_concepts} concepts")
+                return cached_labels
 
         print(f"\n🏷️  Generating diagnosis-conditional labels for {len(df_data)} samples...")
 
