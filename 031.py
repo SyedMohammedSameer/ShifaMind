@@ -33,6 +33,8 @@ NEW IN 031.py - HIERARCHICAL CONCEPT FILTERING (Solution 6):
 ✨ Zero Retraining: Inference-only change, preserves F1 score (0.7730)
 ✨ 100% Guarantee: Invalid concepts completely filtered out (strictness=1.0)
 ✨ Validation Framework: Automated testing of filter correctness
+✨ Concept Availability Check: Ensures min 10 concepts per diagnosis before filtering
+✨ Activation Monitoring: Warns if filter is too aggressive (< 2 avg concepts)
 
 OUTPUT FORMAT:
 {
@@ -2612,12 +2614,27 @@ def validate_concept_filtering(model, test_loader, concept_embeddings, concept_f
     else:
         print(f"   ⚠️  WARNING: {validation_results['invalid_concepts_after']} invalid concepts still present")
 
-    print(f"\n   Concepts per diagnosis:")
+    print(f"\n   Average activated concepts per diagnosis (after filtering):")
     for code in target_codes:
         counts = validation_results['concepts_per_diagnosis'][code]
+        available = len(concept_store.diagnosis_to_concepts.get(code, []))
         if counts:
-            avg = np.mean(counts)
-            print(f"      {code}: {avg:.1f} concepts (avg)")
+            avg_activated = np.mean(counts)
+            print(f"      {code}: {avg_activated:.1f} activated (out of {available} available)")
+        else:
+            print(f"      {code}: 0 samples in test set (out of {available} available)")
+
+    # Check if filter is too aggressive (zeroing out everything)
+    total_activated = sum(sum(counts) for counts in validation_results['concepts_per_diagnosis'].values())
+    avg_activated_overall = total_activated / validation_results['total_samples']
+
+    if avg_activated_overall < 2.0:
+        print(f"\n   ⚠️  WARNING: Very few concepts activated ({avg_activated_overall:.1f} avg)")
+        print(f"      Filter may be too aggressive or concept scores too low")
+    elif avg_activated_overall < 5.0:
+        print(f"\n   ℹ️  Note: Moderate activation ({avg_activated_overall:.1f} avg concepts per sample)")
+    else:
+        print(f"\n   ✅ Good activation rate ({avg_activated_overall:.1f} avg concepts per sample)")
 
     return validation_results
 
@@ -2687,6 +2704,34 @@ if __name__ == "__main__":
     # Filter concept store to only concepts with PMI scores (removes noise)
     # CRITICAL: Pass target_codes to guarantee minimum concepts per diagnosis
     concept_store.filter_to_concepts_with_pmi(concepts_with_pmi, target_codes=target_codes, min_per_diagnosis=15)
+
+    # VERIFY: Ensure each diagnosis has sufficient concepts for filtering
+    print("\n" + "="*70)
+    print("VERIFYING DIAGNOSIS-CONCEPT MAPPINGS")
+    print("="*70)
+    print("\n📊 Concepts available per diagnosis:")
+
+    min_acceptable_concepts = 10  # Minimum for viable explainability
+    insufficient_diagnoses = []
+
+    for diagnosis_code in target_codes:
+        concept_count = len(concept_store.diagnosis_to_concepts.get(diagnosis_code, []))
+        status = "✅" if concept_count >= min_acceptable_concepts else "❌"
+        print(f"  {status} {diagnosis_code}: {concept_count} concepts")
+
+        if concept_count < min_acceptable_concepts:
+            insufficient_diagnoses.append((diagnosis_code, concept_count))
+
+    if insufficient_diagnoses:
+        print(f"\n❌ ERROR: Insufficient concepts for filtering!")
+        for code, count in insufficient_diagnoses:
+            print(f"  {code} has only {count} concepts (need at least {min_acceptable_concepts})")
+        print("\n💡 Solution: Increase min_per_diagnosis parameter or adjust keywords")
+        raise ValueError(f"Cannot proceed with filtering - insufficient concepts for {len(insufficient_diagnoses)} diagnosis(es)")
+
+    print(f"\n✅ All diagnoses have sufficient concepts for filtering!")
+    print(f"   Minimum acceptable: {min_acceptable_concepts} concepts per diagnosis")
+    print(f"   All diagnoses meet or exceed this threshold")
 
     # Load model
     print("\n" + "="*70)
