@@ -318,15 +318,13 @@ class ReasoningChainGenerator:
         scored_concepts = []
         for idx, (cui, concept_data) in enumerate(concept_list):
             score = concept_probs[idx].item()
-            if score < 0.7:  # Skip low-scoring concepts
-                continue
-
             concept_name = concept_data['preferred_name'].lower()
 
             # Check if concept matches diagnosis keywords
             is_relevant = any(kw in concept_name for kw in relevant_keywords)
 
             if is_relevant:
+                # NO SCORE THRESHOLD - show all diagnosis-relevant concepts!
                 scored_concepts.append({
                     'idx': idx,
                     'cui': cui,
@@ -338,15 +336,19 @@ class ReasoningChainGenerator:
         scored_concepts = sorted(scored_concepts, key=lambda x: x['score'], reverse=True)[:5]
 
         if not scored_concepts:
-            # Fallback: if no relevant concepts found, take top 5 overall
-            top_k = 5
-            top_indices = torch.argsort(concept_probs, descending=True)[:top_k]
-            scored_concepts = [{
-                'idx': idx.item(),
-                'cui': concept_list[idx.item()][0],
-                'name': concept_list[idx.item()][1]['preferred_name'],
-                'score': concept_probs[idx].item()
-            } for idx in top_indices]
+            # Fallback: if ZERO relevant concepts found (shouldn't happen with protected concepts)
+            # Show message instead of wrong concepts
+            return {
+                'diagnosis': diagnosis_text,
+                'confidence': diagnosis_confidence,
+                'reasoning_chain': [{
+                    'claim': f'No {diagnosis_code}-relevant concepts found in concept store',
+                    'concepts': [],
+                    'evidence': [],
+                    'attention_scores': []
+                }],
+                'rag_support': []
+            }
 
         reasoning_chain = []
         for concept_info in scored_concepts:
