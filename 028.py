@@ -726,13 +726,59 @@ class ConceptStore:
 
         return final_embeddings
 
-    def filter_to_concepts_with_pmi(self, valid_cuis: Set[str]):
-        """Filter concept store to only include concepts with PMI scores"""
-        print(f"\n🔍 Filtering concepts to those with PMI scores...")
+    def filter_to_concepts_with_pmi(self, valid_cuis: Set[str], target_codes: List[str] = None, min_per_diagnosis: int = 15):
+        """
+        Filter concept store to only include concepts with PMI scores
+
+        CRITICAL: Guarantees minimum concepts per diagnosis for explainability
+
+        Args:
+            valid_cuis: Concepts with significant PMI scores
+            target_codes: List of diagnosis codes (e.g., ['J189', 'I5023', 'A419', 'K8000'])
+            min_per_diagnosis: Minimum concepts to keep per diagnosis (default: 15)
+        """
+        print(f"\n🔍 Filtering concepts (min {min_per_diagnosis} per diagnosis)...")
         print(f"  Before: {len(self.concepts)} concepts")
 
-        # Filter concepts
-        filtered_concepts = {cui: info for cui, info in self.concepts.items() if cui in valid_cuis}
+        # Step 1: Identify protected concepts (top N per diagnosis by keyword relevance)
+        protected_cuis = set()
+
+        if target_codes:
+            print(f"  🛡️  Protecting top {min_per_diagnosis} concepts per diagnosis...")
+
+            for diagnosis_code in target_codes:
+                keywords = self._get_diagnosis_keywords(diagnosis_code)
+
+                # Score concepts by keyword relevance
+                concept_scores = []
+                for cui, info in self.concepts.items():
+                    terms_text = ' '.join([info['name']] + info.get('terms', [])).lower()
+
+                    # Count keyword matches
+                    match_count = sum(1 for kw in keywords if kw in terms_text)
+
+                    if match_count > 0:
+                        concept_scores.append((cui, match_count, info['name']))
+
+                # Take top N by match count
+                concept_scores.sort(key=lambda x: x[1], reverse=True)
+                top_concepts = concept_scores[:min_per_diagnosis]
+
+                # Protect these concepts
+                for cui, count, name in top_concepts:
+                    protected_cuis.add(cui)
+
+                print(f"    {diagnosis_code}: Protected {len(top_concepts)} concepts")
+
+        # Step 2: Combine protected + high-PMI concepts
+        concepts_to_keep = protected_cuis | valid_cuis
+
+        print(f"  Protected: {len(protected_cuis)} concepts")
+        print(f"  High-PMI: {len(valid_cuis)} concepts")
+        print(f"  Combined: {len(concepts_to_keep)} concepts")
+
+        # Step 3: Filter concepts
+        filtered_concepts = {cui: info for cui, info in self.concepts.items() if cui in concepts_to_keep}
 
         # Update concept store
         self.concepts = filtered_concepts
@@ -767,7 +813,7 @@ class ConceptStore:
             self.diagnosis_to_concepts = new_diagnosis_to_concepts
             print(f"  ✅ Diagnosis-concept mappings rebuilt")
 
-        print(f"  ✅ Filtered to {len(self.concepts)} concepts with training data")
+        print(f"  ✅ Filtered to {len(self.concepts)} concepts with explainability guarantee")
 
     def _get_diagnosis_keywords(self, diagnosis_code):
         """Get keywords for a diagnosis code"""
@@ -2381,7 +2427,8 @@ if __name__ == "__main__":
     concepts_with_pmi = diagnosis_labeler.build_cooccurrence_statistics(df_train, target_codes)
 
     # Filter concept store to only concepts with PMI scores (removes noise)
-    concept_store.filter_to_concepts_with_pmi(concepts_with_pmi)
+    # CRITICAL: Pass target_codes to guarantee minimum concepts per diagnosis
+    concept_store.filter_to_concepts_with_pmi(concepts_with_pmi, target_codes=target_codes, min_per_diagnosis=15)
 
     # Load model
     print("\n" + "="*70)
