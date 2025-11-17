@@ -194,7 +194,7 @@ class DiagnosisAwareRAG:
         self.index = None
 
     def build_index(self):
-        """Build FAISS index using shared BERT"""
+        """Build FAISS index using shared BERT - processes in batches to avoid OOM"""
         # Create documents from ICD-10
         for code, description in self.icd_descriptions.items():
             self.documents.append({
@@ -203,14 +203,27 @@ class DiagnosisAwareRAG:
                 'diagnosis_prefix': code[0]
             })
 
-        # Encode documents using shared BERT
+        # Encode documents in batches using shared BERT
+        batch_size = 256  # Process 256 documents at a time
         texts = [doc['text'] for doc in self.documents]
-        inputs = self.tokenizer(texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
+        all_embeddings = []
 
-        with torch.no_grad():
-            # Use shared BERT model on GPU
-            outputs = self.bert_model(**inputs.to(self.device))
-            self.doc_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+        for i in range(0, len(texts), batch_size):
+            batch_texts = texts[i:i + batch_size]
+            inputs = self.tokenizer(batch_texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
+
+            with torch.no_grad():
+                # Use shared BERT model on GPU
+                outputs = self.bert_model(**inputs.to(self.device))
+                batch_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+                all_embeddings.append(batch_embeddings)
+
+            # Clear cache after each batch
+            del inputs, outputs
+            torch.cuda.empty_cache()
+
+        # Combine all batches
+        self.doc_embeddings = np.vstack(all_embeddings)
 
         # Normalize for cosine similarity
         norms = np.linalg.norm(self.doc_embeddings, axis=1, keepdims=True)
