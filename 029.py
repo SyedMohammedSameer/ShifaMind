@@ -204,7 +204,7 @@ class DiagnosisAwareRAG:
             })
 
         # Encode documents in batches using shared BERT
-        batch_size = 256  # Process 256 documents at a time
+        batch_size = 128  # Process 128 documents at a time (reduced to avoid OOM)
         texts = [doc['text'] for doc in self.documents]
         all_embeddings = []
 
@@ -822,6 +822,10 @@ if __name__ == "__main__":
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(device)
     model.eval()
+
+    # Free checkpoint memory (huge - contains full model weights!)
+    del checkpoint
+    torch.cuda.empty_cache()
     print("   ✅ Model loaded")
 
     # Build RAG system using shared BERT
