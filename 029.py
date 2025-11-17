@@ -202,13 +202,13 @@ class DiagnosisAwareRAG:
                 'diagnosis_prefix': code[0]
             })
 
-        # Encode documents
+        # Encode documents (USE CPU to save GPU memory)
         texts = [doc['text'] for doc in self.documents]
         inputs = self.tokenizer(texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
 
         with torch.no_grad():
-            bert = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT').to(self.device)
-            outputs = bert(**inputs.to(self.device))
+            bert = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')  # CPU
+            outputs = bert(**inputs)  # CPU
             self.doc_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
 
         # Normalize for cosine similarity
@@ -225,8 +225,8 @@ class DiagnosisAwareRAG:
         inputs = self.tokenizer([query_text], padding=True, truncation=True, max_length=512, return_tensors='pt')
 
         with torch.no_grad():
-            bert = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT').to(self.device)
-            outputs = bert(**inputs.to(self.device))
+            bert = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')  # CPU
+            outputs = bert(**inputs)  # CPU
             query_embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
 
         # Normalize query
@@ -785,7 +785,11 @@ if __name__ == "__main__":
     with torch.no_grad():
         bert = AutoModel.from_pretrained(model_name).to(device)
         outputs = bert(**inputs.to(device))
-        concept_embeddings = outputs.last_hidden_state[:, 0, :]
+        concept_embeddings = outputs.last_hidden_state[:, 0, :].clone()
+
+    # Free GPU memory
+    del bert, outputs, inputs
+    torch.cuda.empty_cache()
 
     print(f"   Concept embeddings: {concept_embeddings.shape}")
 
