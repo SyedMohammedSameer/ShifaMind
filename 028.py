@@ -617,15 +617,16 @@ class ConceptStore:
         print(f"  Direct mappings: {len(relevant_cuis)} concepts")
 
         # Strategy 2: Keyword expansion - GUARANTEE concepts per diagnosis!
+        # MUST MATCH _get_diagnosis_keywords() exactly!
         diagnosis_keywords = {
             'J189': ['pneumonia', 'lung infection', 'respiratory infection',
-                     'infiltrate', 'bacterial pneumonia', 'aspiration'],
+                     'infiltrate', 'bacterial pneumonia', 'aspiration', 'lung', 'respiratory'],
             'I5023': ['heart failure', 'cardiac failure', 'cardiomyopathy',
-                      'pulmonary edema', 'ventricular dysfunction', 'heart'],
+                      'pulmonary edema', 'ventricular dysfunction', 'heart', 'cardiac', 'ventricular', 'atrial'],
             'A419': ['sepsis', 'septicemia', 'bacteremia', 'infection',
-                     'septic shock', 'organ dysfunction'],
+                     'septic shock', 'organ dysfunction', 'septic'],
             'K8000': ['cholecystitis', 'gallbladder', 'biliary disease',
-                      'gallstone', 'cholelithiasis']
+                      'gallstone', 'cholelithiasis', 'bile', 'biliary']
         }
 
         # Collect concepts PER DIAGNOSIS first (prevents early termination bias)
@@ -850,16 +851,16 @@ class ConceptStore:
         print(f"  ✅ Filtered to {len(self.concepts)} concepts with explainability guarantee")
 
     def _get_diagnosis_keywords(self, diagnosis_code):
-        """Get keywords for a diagnosis code"""
+        """Get keywords for a diagnosis code - MUST MATCH build_concept_set keywords!"""
         keywords_map = {
             'J189': ['pneumonia', 'lung infection', 'respiratory infection',
-                     'infiltrate', 'bacterial pneumonia', 'aspiration'],
+                     'infiltrate', 'bacterial pneumonia', 'aspiration', 'lung', 'respiratory'],
             'I5023': ['heart failure', 'cardiac failure', 'cardiomyopathy',
-                      'pulmonary edema', 'ventricular dysfunction'],
+                      'pulmonary edema', 'ventricular dysfunction', 'heart', 'cardiac', 'ventricular', 'atrial'],
             'A419': ['sepsis', 'septicemia', 'bacteremia', 'infection',
-                     'septic shock', 'organ dysfunction'],
+                     'septic shock', 'organ dysfunction', 'septic'],
             'K8000': ['cholecystitis', 'gallbladder', 'biliary disease',
-                      'gallstone', 'cholelithiasis']
+                      'gallstone', 'cholelithiasis', 'bile', 'biliary']
         }
         return keywords_map.get(diagnosis_code, [])
 
