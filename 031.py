@@ -2220,6 +2220,9 @@ class TwoStageInference:
                         attention_mask[i:i+1],
                         self.concept_embeddings
                     )
+                    # Already in full space, no mapping needed
+                    all_concept_scores.append(torch.sigmoid(sample_output['concept_scores']))
+                    all_attention_weights.append(sample_output['attention_weights'])
                 else:
                     # Run Stage 2 with filtered embeddings
                     sample_output = self.model(
@@ -2228,23 +2231,41 @@ class TwoStageInference:
                         filtered_embeddings
                     )
 
-                # =================================================================
-                # INDEX MAPPING: Filtered → Full Concept Space
-                # =================================================================
-                # Stage 2 outputs: [1, num_filtered_concepts]
-                # Need: [1, num_concepts] (full concept space)
+                    # =================================================================
+                    # INDEX MAPPING: Filtered → Full Concept Space
+                    # =================================================================
+                    # Stage 2 outputs: [1, num_filtered_concepts]
+                    # Need: [1, num_concepts] (full concept space)
 
-                full_concept_scores = torch.zeros(1, num_concepts, device=self.device)
+                    full_concept_scores = torch.zeros(1, num_concepts, device=self.device)
 
-                # Map filtered scores to their original positions
-                stage2_scores = torch.sigmoid(sample_output['concept_scores'])[0]  # [num_filtered]
+                    # Map filtered scores to their original positions
+                    stage2_scores = torch.sigmoid(sample_output['concept_scores'])[0]  # [num_filtered]
 
-                for filtered_idx, full_idx in enumerate(valid_concept_indices):
-                    if filtered_idx < len(stage2_scores):  # Safety check
-                        full_concept_scores[0, full_idx] = stage2_scores[filtered_idx]
+                    for filtered_idx, full_idx in enumerate(valid_concept_indices):
+                        if filtered_idx < len(stage2_scores):  # Safety check
+                            full_concept_scores[0, full_idx] = stage2_scores[filtered_idx]
 
-                all_concept_scores.append(full_concept_scores)
-                all_attention_weights.append(sample_output['attention_weights'])
+                    # CRITICAL: Also map attention weights to full concept space
+                    # Attention weights: List of [seq_len, num_filtered_concepts]
+                    # Need: List of [seq_len, num_concepts]
+                    mapped_attention_weights = []
+                    for attn in sample_output['attention_weights']:
+                        seq_len = attn.size(0)
+                        num_filtered = attn.size(1)
+
+                        # Create full attention tensor with zeros
+                        full_attn = torch.zeros(seq_len, num_concepts, device=self.device)
+
+                        # Map filtered attention to original positions
+                        for filtered_idx, full_idx in enumerate(valid_concept_indices):
+                            if filtered_idx < num_filtered:
+                                full_attn[:, full_idx] = attn[:, filtered_idx]
+
+                        mapped_attention_weights.append(full_attn)
+
+                    all_concept_scores.append(full_concept_scores)
+                    all_attention_weights.append(mapped_attention_weights)
 
             except Exception as e:
                 print(f"   ❌ Stage 2 failed for sample {i}: {e}")
