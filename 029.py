@@ -60,92 +60,126 @@ class ConceptStore:
         self.concepts = concepts
 
 class EnhancedCrossAttention(nn.Module):
-    """Cross-attention between text and concepts (from 028.py)"""
-    def __init__(self, hidden_size=768, num_heads=8):
+    """Cross-attention between text and concepts (EXACT copy from 028.py)"""
+    def __init__(self, hidden_size, num_heads=8, dropout=0.1):
         super().__init__()
+        self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
 
-        self.q_linear = nn.Linear(hidden_size, hidden_size)
-        self.k_linear = nn.Linear(hidden_size, hidden_size)
-        self.v_linear = nn.Linear(hidden_size, hidden_size)
-        self.out_linear = nn.Linear(hidden_size, hidden_size)
+        self.query = nn.Linear(hidden_size, hidden_size)
+        self.key = nn.Linear(hidden_size, hidden_size)
+        self.value = nn.Linear(hidden_size, hidden_size)
+
         self.gate = nn.Linear(hidden_size * 2, hidden_size)
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(hidden_size)
 
-    def forward(self, text_hidden, concept_embeddings):
-        batch_size = text_hidden.size(0)
-        seq_len = text_hidden.size(1)
-        num_concepts = concept_embeddings.size(0)
+    def forward(self, hidden_states, concept_embeddings, attention_mask=None):
+        batch_size, seq_len, hidden_size = hidden_states.shape
+        num_concepts = concept_embeddings.shape[0]
 
-        concept_expanded = concept_embeddings.unsqueeze(0).expand(batch_size, -1, -1)
+        concepts_batch = concept_embeddings.unsqueeze(0).expand(batch_size, -1, -1)
 
-        Q = self.q_linear(text_hidden).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        K = self.k_linear(concept_expanded).view(batch_size, num_concepts, self.num_heads, self.head_dim).transpose(1, 2)
-        V = self.v_linear(concept_expanded).view(batch_size, num_concepts, self.num_heads, self.head_dim).transpose(1, 2)
+        Q = self.query(hidden_states).view(
+            batch_size, seq_len, self.num_heads, self.head_dim
+        ).transpose(1, 2)
+
+        K = self.key(concepts_batch).view(
+            batch_size, num_concepts, self.num_heads, self.head_dim
+        ).transpose(1, 2)
+
+        V = self.value(concepts_batch).view(
+            batch_size, num_concepts, self.num_heads, self.head_dim
+        ).transpose(1, 2)
 
         scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim ** 0.5)
         attn_weights = F.softmax(scores, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+
         context = torch.matmul(attn_weights, V)
-        context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
-        context = self.out_linear(context)
+        context = context.transpose(1, 2).contiguous().view(
+            batch_size, seq_len, hidden_size
+        )
 
-        combined = torch.cat([text_hidden, context], dim=-1)
-        gate_values = torch.sigmoid(self.gate(combined))
-        fused = gate_values * text_hidden + (1 - gate_values) * context
+        gate_input = torch.cat([hidden_states, context], dim=-1)
+        gate_values = torch.sigmoid(self.gate(gate_input))
+        output = hidden_states + gate_values * context
 
-        return fused, attn_weights
+        output = self.layer_norm(output)
+
+        return output, attn_weights.mean(dim=1)
 
 class ShifaMindModel(nn.Module):
-    """ShifaMind model (from 028.py)"""
-    def __init__(self, model_name, num_diagnoses, concept_store, concept_embeddings, fusion_layers=[9, 11]):
+    """ShifaMind model (EXACT copy from 028.py)"""
+    def __init__(self, base_model, concept_store, num_classes, fusion_layers=[9, 11]):
         super().__init__()
-        self.bert = AutoModel.from_pretrained(model_name)
+        self.base_model = base_model
         self.concept_store = concept_store
-        self.num_concepts = len(concept_store.concepts)
+        self.num_classes = num_classes
+        self.hidden_size = base_model.config.hidden_size
         self.fusion_layers = fusion_layers
 
-        self.register_buffer('concept_embeddings', concept_embeddings)
+        self.fusion_modules = nn.ModuleList([
+            EnhancedCrossAttention(self.hidden_size, num_heads=8)
+            for _ in fusion_layers
+        ])
 
-        self.cross_attentions = nn.ModuleDict({
-            str(layer): EnhancedCrossAttention()
-            for layer in fusion_layers
-        })
+        self.diagnosis_head = nn.Linear(self.hidden_size, num_classes)
+        self.concept_head = nn.Linear(self.hidden_size, len(concept_store.concepts))
 
-        hidden_size = self.bert.config.hidden_size
-        self.diagnosis_head = nn.Linear(hidden_size, num_diagnoses)
-        self.concept_head = nn.Linear(hidden_size, self.num_concepts)
+        self.diagnosis_concept_interaction = nn.Bilinear(
+            num_classes, len(concept_store.concepts), len(concept_store.concepts)
+        )
 
-    def forward(self, input_ids, attention_mask):
-        outputs = self.bert(
+        self.dropout = nn.Dropout(0.1)
+
+    def forward(self, input_ids, attention_mask, concept_embeddings,
+                return_diagnosis_only=False):
+        outputs = self.base_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             output_hidden_states=True,
             return_dict=True
         )
 
+        if return_diagnosis_only:
+            cls_hidden = outputs.last_hidden_state[:, 0, :]
+            cls_hidden = self.dropout(cls_hidden)
+            diagnosis_logits = self.diagnosis_head(cls_hidden)
+            return {'logits': diagnosis_logits}
+
         hidden_states = outputs.hidden_states
         current_hidden = hidden_states[-1]
 
-        fusion_outputs = {}
-        for layer in self.fusion_layers:
-            layer_hidden = hidden_states[layer]
-            fused, attn_weights = self.cross_attentions[str(layer)](
-                layer_hidden,
-                self.concept_embeddings
+        fusion_attentions = []
+        for i, fusion_module in enumerate(self.fusion_modules):
+            layer_idx = self.fusion_layers[i]
+            layer_hidden = hidden_states[layer_idx]
+
+            fused_hidden, attn_weights = fusion_module(
+                layer_hidden, concept_embeddings, attention_mask
             )
-            fusion_outputs[f'layer_{layer}_attn'] = attn_weights
-            current_hidden = current_hidden + fused
+            fusion_attentions.append(attn_weights)
 
-        pooled = current_hidden[:, 0, :]
+            if i == len(self.fusion_modules) - 1:
+                current_hidden = fused_hidden
 
-        diagnosis_logits = self.diagnosis_head(pooled)
-        concept_logits = self.concept_head(pooled)
+        cls_hidden = current_hidden[:, 0, :]
+        cls_hidden = self.dropout(cls_hidden)
+
+        diagnosis_logits = self.diagnosis_head(cls_hidden)
+        concept_logits = self.concept_head(cls_hidden)
+
+        diagnosis_probs = torch.sigmoid(diagnosis_logits)
+        refined_concept_logits = self.diagnosis_concept_interaction(
+            diagnosis_probs, torch.sigmoid(concept_logits)
+        )
 
         return {
-            'diagnosis_logits': diagnosis_logits,
-            'concept_logits': concept_logits,
-            'hidden_states': current_hidden,
-            'fusion_outputs': fusion_outputs
+            'logits': diagnosis_logits,
+            'concept_scores': refined_concept_logits,
+            'attention_weights': fusion_attentions
         }
 
 class DiagnosisAwareRAG:
@@ -240,10 +274,14 @@ class ReasoningChainGenerator:
         ).to(self.device)
 
         with torch.no_grad():
-            outputs = self.model(**inputs)
+            outputs = self.model(
+                input_ids=inputs['input_ids'],
+                attention_mask=inputs['attention_mask'],
+                concept_embeddings=concept_embeddings
+            )
 
-        diagnosis_probs = torch.sigmoid(outputs['diagnosis_logits'][0])
-        concept_probs = torch.sigmoid(outputs['concept_logits'][0])
+        diagnosis_probs = torch.sigmoid(outputs['logits'][0])
+        concept_probs = torch.sigmoid(outputs['concept_scores'][0])
 
         top_diagnosis_idx = torch.argmax(diagnosis_probs).item()
         diagnosis_code = self.target_codes[top_diagnosis_idx]
@@ -262,9 +300,9 @@ class ReasoningChainGenerator:
             concept_score = concept_probs[concept_idx].item()
 
             # Extract evidence using attention
-            attn_key = list(outputs['fusion_outputs'].keys())[0]
-            attn_weights = outputs['fusion_outputs'][attn_key][0]
-            concept_attn = attn_weights[:, :, concept_idx, :].mean(dim=1)
+            # Use the last fusion layer's attention weights
+            attn_weights = outputs['attention_weights'][-1]  # Shape: [batch, seq_len, num_concepts]
+            concept_attn = attn_weights[:, :, concept_idx]  # Shape: [batch, seq_len]
 
             top_attn_indices = torch.argsort(concept_attn[0], descending=True)[:3]
 
@@ -751,17 +789,18 @@ if __name__ == "__main__":
 
     print(f"   Concept embeddings: {concept_embeddings.shape}")
 
-    # Initialize model
+    # Initialize model (match 028.py signature)
+    base_model = AutoModel.from_pretrained(model_name).to(device)
     model = ShifaMindModel(
-        model_name=model_name,
-        num_diagnoses=len(target_codes),
+        base_model=base_model,
         concept_store=concept_store,
-        concept_embeddings=concept_embeddings,
+        num_classes=len(target_codes),
         fusion_layers=[9, 11]
-    ).to(device)
+    )
 
     # Load weights
     model.load_state_dict(checkpoint['model_state_dict'])
+    model.to(device)
     model.eval()
     print("   ✅ Model loaded")
 
