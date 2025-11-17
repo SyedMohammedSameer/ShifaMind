@@ -380,14 +380,18 @@ def load_icd10_descriptions(icd_path):
 # ============================================================================
 
 def load_umls_concepts(checkpoint_concept_cuis):
-    """Load UMLS concepts for CUIs in checkpoint"""
+    """Load UMLS concepts for CUIs in checkpoint - PRESERVES ORDER"""
     print("📚 Loading UMLS concepts...")
 
-    concepts = {}
+    # CRITICAL: Must preserve exact order from checkpoint!
+    # Model indices depend on this order: index 0 → checkpoint_concept_cuis[0], etc.
+    from collections import OrderedDict
+
     mrconso_file = UMLS_PATH / 'MRCONSO.RRF'
+    target_cuis_set = set(checkpoint_concept_cuis)
 
-    target_cuis = set(checkpoint_concept_cuis)
-
+    # First pass: Load all target concepts from MRCONSO (unordered)
+    temp_concepts = {}
     with open(mrconso_file, 'r', encoding='utf-8', errors='ignore') as f:
         for line in f:
             parts = line.strip().split('|')
@@ -395,7 +399,7 @@ def load_umls_concepts(checkpoint_concept_cuis):
                 continue
 
             cui = parts[0]
-            if cui not in target_cuis:
+            if cui not in target_cuis_set:
                 continue
 
             lang = parts[1]
@@ -405,15 +409,28 @@ def load_umls_concepts(checkpoint_concept_cuis):
             preferred = parts[2] == 'P'
             name = parts[14]
 
-            if cui not in concepts or preferred:
-                concepts[cui] = {
+            if cui not in temp_concepts or preferred:
+                temp_concepts[cui] = {
                     'cui': cui,
                     'preferred_name': name,
                     'definition': ''
                 }
 
-    print(f"✅ Loaded {len(concepts)} UMLS concepts")
-    return concepts
+    # Second pass: Rebuild in EXACT checkpoint order
+    ordered_concepts = OrderedDict()
+    for cui in checkpoint_concept_cuis:
+        if cui in temp_concepts:
+            ordered_concepts[cui] = temp_concepts[cui]
+        else:
+            # Fallback if CUI not found
+            ordered_concepts[cui] = {
+                'cui': cui,
+                'preferred_name': f'Concept {cui}',
+                'definition': ''
+            }
+
+    print(f"✅ Loaded {len(ordered_concepts)} UMLS concepts")
+    return ordered_concepts
 
 # ============================================================================
 # GRADIO DEMO FUNCTIONS
