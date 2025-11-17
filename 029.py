@@ -183,18 +183,19 @@ class ShifaMindModel(nn.Module):
         }
 
 class DiagnosisAwareRAG:
-    """Diagnosis-aware RAG (from 028.py)"""
-    def __init__(self, icd_descriptions, tokenizer, device):
+    """Diagnosis-aware RAG - shares BERT model to save memory"""
+    def __init__(self, icd_descriptions, tokenizer, device, bert_model=None):
         self.icd_descriptions = icd_descriptions
         self.tokenizer = tokenizer
         self.device = device
+        self.bert_model = bert_model  # Shared BERT model
         self.documents = []
         self.doc_embeddings = None
         self.index = None
 
     def build_index(self):
-        """Build FAISS index for RAG"""
-        # Create documents from ICD-10 + definitions
+        """Build FAISS index using shared BERT"""
+        # Create documents from ICD-10
         for code, description in self.icd_descriptions.items():
             self.documents.append({
                 'text': f"ICD-10 {code}: {description}",
@@ -202,13 +203,13 @@ class DiagnosisAwareRAG:
                 'diagnosis_prefix': code[0]
             })
 
-        # Encode documents (USE CPU to save GPU memory)
+        # Encode documents using shared BERT
         texts = [doc['text'] for doc in self.documents]
         inputs = self.tokenizer(texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
 
         with torch.no_grad():
-            bert = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')  # CPU
-            outputs = bert(**inputs)  # CPU
+            # Use shared BERT model on GPU
+            outputs = self.bert_model(**inputs.to(self.device))
             self.doc_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
 
         # Normalize for cosine similarity
@@ -221,12 +222,12 @@ class DiagnosisAwareRAG:
         self.index.add(self.doc_embeddings_normalized.astype('float32'))
 
     def retrieve(self, query_text, diagnosis_code=None, k=5):
-        """Retrieve relevant documents"""
+        """Retrieve documents using shared BERT"""
         inputs = self.tokenizer([query_text], padding=True, truncation=True, max_length=512, return_tensors='pt')
 
         with torch.no_grad():
-            bert = AutoModel.from_pretrained('emilyalsentzer/Bio_ClinicalBERT')  # CPU
-            outputs = bert(**inputs)  # CPU
+            # Use shared BERT model on GPU
+            outputs = self.bert_model(**inputs.to(self.device))
             query_embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
 
         # Normalize query
@@ -780,23 +781,25 @@ if __name__ == "__main__":
         for c in umls_concepts.values()
     ]
 
-    inputs = tokenizer(concept_texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
+    # Load BERT once and share it across all components
+    print("   Loading shared BERT model...")
+    bert_model = AutoModel.from_pretrained(model_name).to(device)
 
+    # Create concept embeddings using shared BERT
+    inputs = tokenizer(concept_texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
     with torch.no_grad():
-        bert = AutoModel.from_pretrained(model_name).to(device)
-        outputs = bert(**inputs.to(device))
+        outputs = bert_model(**inputs.to(device))
         concept_embeddings = outputs.last_hidden_state[:, 0, :].clone()
 
-    # Free GPU memory
-    del bert, outputs, inputs
+    # Free temporary tensors (but keep bert_model)
+    del outputs, inputs
     torch.cuda.empty_cache()
 
     print(f"   Concept embeddings: {concept_embeddings.shape}")
 
-    # Initialize model (match 028.py signature)
-    base_model = AutoModel.from_pretrained(model_name).to(device)
+    # Initialize model using shared BERT (match 028.py signature)
     model = ShifaMindModel(
-        base_model=base_model,
+        base_model=bert_model,  # Reuse same BERT
         concept_store=concept_store,
         num_classes=len(target_codes),
         fusion_layers=[9, 11]
@@ -808,9 +811,9 @@ if __name__ == "__main__":
     model.eval()
     print("   ✅ Model loaded")
 
-    # Build RAG system
+    # Build RAG system using shared BERT
     print("\n🔍 Building RAG system...")
-    rag = DiagnosisAwareRAG(icd10_descriptions, tokenizer, device)
+    rag = DiagnosisAwareRAG(icd10_descriptions, tokenizer, device, bert_model=bert_model)
     rag.build_index()
     print("   ✅ RAG index built")
 
