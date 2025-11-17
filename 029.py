@@ -302,16 +302,58 @@ class ReasoningChainGenerator:
         diagnosis_confidence = diagnosis_probs[top_diagnosis_idx].item()
         diagnosis_text = f"{diagnosis_code} - {self.icd_descriptions.get(diagnosis_code, 'Unknown')}"
 
-        # Get top concepts
-        top_k = 5
-        top_concept_indices = torch.argsort(concept_probs, descending=True)[:top_k]
+        # DIAGNOSIS-SPECIFIC concept filtering (critical fix!)
+        diagnosis_keywords = {
+            'J189': ['pneumonia', 'lung', 'respiratory', 'infection', 'infiltrate', 'bacterial', 'aspiration'],
+            'I5023': ['heart', 'cardiac', 'failure', 'cardiomyopathy', 'edema', 'ventricular', 'atrial'],
+            'A419': ['sepsis', 'septicemia', 'bacteremia', 'infection', 'septic', 'shock', 'organ'],
+            'K8000': ['cholecystitis', 'gallbladder', 'biliary', 'gallstone', 'cholelithiasis', 'bile']
+        }
 
+        # Filter concepts by diagnosis relevance
         concept_list = list(self.concept_store.concepts.items())
+        relevant_keywords = diagnosis_keywords.get(diagnosis_code, [])
+
+        # Score and filter concepts
+        scored_concepts = []
+        for idx, (cui, concept_data) in enumerate(concept_list):
+            score = concept_probs[idx].item()
+            if score < 0.7:  # Skip low-scoring concepts
+                continue
+
+            concept_name = concept_data['preferred_name'].lower()
+
+            # Check if concept matches diagnosis keywords
+            is_relevant = any(kw in concept_name for kw in relevant_keywords)
+
+            if is_relevant:
+                scored_concepts.append({
+                    'idx': idx,
+                    'cui': cui,
+                    'name': concept_data['preferred_name'],
+                    'score': score
+                })
+
+        # Sort by score and take top 5
+        scored_concepts = sorted(scored_concepts, key=lambda x: x['score'], reverse=True)[:5]
+
+        if not scored_concepts:
+            # Fallback: if no relevant concepts found, take top 5 overall
+            top_k = 5
+            top_indices = torch.argsort(concept_probs, descending=True)[:top_k]
+            scored_concepts = [{
+                'idx': idx.item(),
+                'cui': concept_list[idx.item()][0],
+                'name': concept_list[idx.item()][1]['preferred_name'],
+                'score': concept_probs[idx].item()
+            } for idx in top_indices]
 
         reasoning_chain = []
-        for concept_idx in top_concept_indices:
-            concept_cui, concept_data = concept_list[concept_idx]
-            concept_score = concept_probs[concept_idx].item()
+        for concept_info in scored_concepts:
+            concept_idx = concept_info['idx']
+            concept_cui = concept_info['cui']
+            concept_data = {'preferred_name': concept_info['name']}
+            concept_score = concept_info['score']
 
             # Extract evidence using attention
             # Use the last fusion layer's attention weights
@@ -336,8 +378,11 @@ class ReasoningChainGenerator:
                     attention_scores.append(concept_attn[0][attn_idx].item())
 
             if evidence_spans:
+                # Create diagnosis-specific claims
+                claim = self._create_claim(diagnosis_code, concept_data['preferred_name'])
+
                 reasoning_chain.append({
-                    'claim': 'Evidence of cardiovascular pathology' if 'I50' in diagnosis_code else 'Evidence of respiratory pathology',
+                    'claim': claim,
                     'concepts': [{
                         'cui': concept_cui,
                         'name': concept_data['preferred_name'],
@@ -356,6 +401,29 @@ class ReasoningChainGenerator:
             'reasoning_chain': reasoning_chain,
             'rag_support': rag_docs
         }
+
+    def _create_claim(self, diagnosis_code, concept_name):
+        """Create diagnosis-specific claim"""
+        prefix = diagnosis_code[0]
+
+        if prefix == 'J':  # Pneumonia
+            if 'pneumonia' in concept_name.lower():
+                return "Evidence of pneumonia or respiratory infection"
+            return "Evidence of respiratory pathology"
+        elif prefix == 'I':  # Heart failure
+            if 'heart' in concept_name.lower() or 'cardiac' in concept_name.lower():
+                return "Evidence of cardiac dysfunction"
+            return "Evidence of cardiovascular pathology"
+        elif prefix == 'A':  # Sepsis
+            if 'sepsis' in concept_name.lower() or 'infection' in concept_name.lower():
+                return "Evidence of systemic infection or sepsis"
+            return "Evidence of infectious process"
+        elif prefix == 'K':  # Cholecystitis
+            if 'gallbladder' in concept_name.lower() or 'cholecyst' in concept_name.lower():
+                return "Evidence of gallbladder disease"
+            return "Evidence of biliary pathology"
+
+        return f"Evidence supporting {diagnosis_code}"
 
 # ============================================================================
 # LOAD ICD-10 DESCRIPTIONS
