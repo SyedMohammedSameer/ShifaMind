@@ -616,17 +616,20 @@ class ConceptStore:
 
         print(f"  Direct mappings: {len(relevant_cuis)} concepts")
 
-        # Strategy 2: Keyword expansion
+        # Strategy 2: Keyword expansion - GUARANTEE concepts per diagnosis!
         diagnosis_keywords = {
             'J189': ['pneumonia', 'lung infection', 'respiratory infection',
                      'infiltrate', 'bacterial pneumonia', 'aspiration'],
             'I5023': ['heart failure', 'cardiac failure', 'cardiomyopathy',
-                      'pulmonary edema', 'ventricular dysfunction'],
+                      'pulmonary edema', 'ventricular dysfunction', 'heart'],
             'A419': ['sepsis', 'septicemia', 'bacteremia', 'infection',
                      'septic shock', 'organ dysfunction'],
             'K8000': ['cholecystitis', 'gallbladder', 'biliary disease',
                       'gallstone', 'cholelithiasis']
         }
+
+        # Collect concepts PER DIAGNOSIS first (prevents early termination bias)
+        per_diagnosis_concepts = {icd: set() for icd in target_icd_codes}
 
         for icd in target_icd_codes:
             keywords = diagnosis_keywords.get(icd, [])
@@ -639,13 +642,33 @@ class ConceptStore:
 
                 if any(kw in terms_text for kw in keywords):
                     if self.semantic_validator.validate_concept(cui, icd):
-                        relevant_cuis.add(cui)
+                        per_diagnosis_concepts[icd].add(cui)
 
+        # Report per-diagnosis counts
+        for icd in target_icd_codes:
+            print(f"    {icd}: {len(per_diagnosis_concepts[icd])} keyword-matched concepts")
+
+        # Combine all diagnosis-specific concepts
+        for icd_concepts in per_diagnosis_concepts.values():
+            relevant_cuis.update(icd_concepts)
+
+        # If still under target, expand freely
+        if len(relevant_cuis) < target_concept_count:
+            remaining = target_concept_count - len(relevant_cuis)
+            print(f"  Need {remaining} more concepts, expanding...")
+
+            for cui, info in self.umls_concepts.items():
+                if cui in relevant_cuis:
+                    continue
                 if len(relevant_cuis) >= target_concept_count:
                     break
 
-            if len(relevant_cuis) >= target_concept_count:
-                break
+                terms_text = ' '.join([info['name']] + info.get('terms', [])).lower()
+                # Look for any diagnosis keyword
+                all_keywords = [kw for keywords in diagnosis_keywords.values() for kw in keywords]
+
+                if any(kw in terms_text for kw in all_keywords):
+                    relevant_cuis.add(cui)
 
         print(f"  After expansion: {len(relevant_cuis)} concepts")
 
