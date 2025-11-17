@@ -310,15 +310,34 @@ class ReasoningChainGenerator:
             'K8000': ['cholecystitis', 'gallbladder', 'biliary', 'gallstone', 'cholelithiasis', 'bile']
         }
 
+        # BLACKLIST wrong concepts per diagnosis (post-diagnosis filtering)
+        CONCEPT_BLACKLIST = {
+            'I5023': [
+                'C0085740',  # Mendelson Syndrome (aspiration pneumonitis)
+                'C0038166',  # Staphylococcal Skin Infections
+                'C0276333',  # Parainfluenza virus pneumonia
+                'C0152485',  # Other salmonella infections
+                'C0275716',  # Infection due to other mycobacteria
+            ],
+            'J189': [],
+            'A419': [],
+            'K8000': []
+        }
+
         # Filter concepts by diagnosis relevance
         concept_list = list(self.concept_store.concepts.items())
         relevant_keywords = diagnosis_keywords.get(diagnosis_code, [])
+        blacklisted_cuis = CONCEPT_BLACKLIST.get(diagnosis_code, [])
 
         # Score and filter concepts
         scored_concepts = []
         for idx, (cui, concept_data) in enumerate(concept_list):
             score = concept_probs[idx].item()
             concept_name = concept_data['preferred_name'].lower()
+
+            # Skip blacklisted concepts for this diagnosis
+            if cui in blacklisted_cuis:
+                continue
 
             # Check if concept matches diagnosis keywords
             is_relevant = any(kw in concept_name for kw in relevant_keywords)
