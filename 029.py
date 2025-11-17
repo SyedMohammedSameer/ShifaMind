@@ -312,7 +312,7 @@ class ReasoningChainGenerator:
 def load_icd10_descriptions(icd_path):
     """Load ICD-10 descriptions"""
     descriptions = {}
-    icd_file = icd_path / 'icd10cm-codes-descriptions-2024.txt'
+    icd_file = icd_path / 'icd10cm-codes-2024.txt'
 
     with open(icd_file, 'r', encoding='utf-8') as f:
         for line in f:
@@ -745,7 +745,7 @@ if __name__ == "__main__":
     inputs = tokenizer(concept_texts, padding=True, truncation=True, max_length=128, return_tensors='pt')
 
     with torch.no_grad():
-        bert = AutoModel.from_pretrained(model_name)
+        bert = AutoModel.from_pretrained(model_name).to(device)
         outputs = bert(**inputs.to(device))
         concept_embeddings = outputs.last_hidden_state[:, 0, :]
 
