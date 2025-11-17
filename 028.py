@@ -743,7 +743,45 @@ class ConceptStore:
         self.idx_to_concept = {i: cui for i, cui in enumerate(concept_list)}
 
         print(f"  After: {len(self.concepts)} concepts")
+
+        # CRITICAL: Rebuild diagnosis-to-concept mappings with new indices!
+        if hasattr(self, 'diagnosis_to_concepts'):
+            print(f"  🔄 Rebuilding diagnosis-concept mappings with new indices...")
+            new_diagnosis_to_concepts = {}
+
+            for diagnosis_code, old_concept_indices in self.diagnosis_to_concepts.items():
+                # Rebuild from scratch using keywords on filtered concepts
+                new_concept_indices = []
+                keywords = self._get_diagnosis_keywords(diagnosis_code)
+
+                for cui, info in self.concepts.items():
+                    concept_idx = self.concept_to_idx[cui]
+                    terms_text = ' '.join([info['name']] + info.get('terms', [])).lower()
+
+                    if any(kw in terms_text for kw in keywords):
+                        new_concept_indices.append(concept_idx)
+
+                new_diagnosis_to_concepts[diagnosis_code] = new_concept_indices
+                print(f"    {diagnosis_code}: {len(new_concept_indices)} concepts (was {len(old_concept_indices)})")
+
+            self.diagnosis_to_concepts = new_diagnosis_to_concepts
+            print(f"  ✅ Diagnosis-concept mappings rebuilt")
+
         print(f"  ✅ Filtered to {len(self.concepts)} concepts with training data")
+
+    def _get_diagnosis_keywords(self, diagnosis_code):
+        """Get keywords for a diagnosis code"""
+        keywords_map = {
+            'J189': ['pneumonia', 'lung infection', 'respiratory infection',
+                     'infiltrate', 'bacterial pneumonia', 'aspiration'],
+            'I5023': ['heart failure', 'cardiac failure', 'cardiomyopathy',
+                      'pulmonary edema', 'ventricular dysfunction'],
+            'A419': ['sepsis', 'septicemia', 'bacteremia', 'infection',
+                     'septic shock', 'organ dysfunction'],
+            'K8000': ['cholecystitis', 'gallbladder', 'biliary disease',
+                      'gallstone', 'cholelithiasis']
+        }
+        return keywords_map.get(diagnosis_code, [])
 
 # ============================================================================
 # DIAGNOSIS-AWARE RAG
