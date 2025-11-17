@@ -886,6 +886,6 @@ if __name__ == "__main__":
     demo.launch(
         share=True,
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=None,  # Auto-find available port
         show_error=True
     )
