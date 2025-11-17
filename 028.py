@@ -654,9 +654,35 @@ class ConceptStore:
         self.concept_to_idx = {cui: i for i, cui in enumerate(concept_list)}
         self.idx_to_concept = {i: cui for i, cui in enumerate(concept_list)}
 
+        # Build diagnosis-to-concept mapping for alignment supervision
+        self._build_diagnosis_concept_mapping(target_icd_codes, diagnosis_keywords)
+
         print(f"  ✅ Final: {len(self.concepts)} validated concepts")
 
         return self.concepts
+
+    def _build_diagnosis_concept_mapping(self, target_icd_codes: List[str], diagnosis_keywords: Dict[str, List[str]]):
+        """Build mapping from diagnosis codes to relevant concept indices"""
+        print("\n🔗 Building diagnosis-concept mappings for alignment supervision...")
+
+        self.diagnosis_to_concepts = {}
+
+        for icd in target_icd_codes:
+            keywords = diagnosis_keywords.get(icd, [])
+            relevant_concept_indices = []
+
+            for cui, info in self.concepts.items():
+                concept_idx = self.concept_to_idx[cui]
+                terms_text = ' '.join([info['name']] + info.get('terms', [])).lower()
+
+                # Check if concept matches this diagnosis's keywords
+                if any(kw in terms_text for kw in keywords):
+                    relevant_concept_indices.append(concept_idx)
+
+            self.diagnosis_to_concepts[icd] = relevant_concept_indices
+            print(f"  {icd}: {len(relevant_concept_indices)} relevant concepts")
+
+        print(f"  ✅ Diagnosis-concept mappings created")
 
     def _get_icd_variants(self, code: str) -> List[str]:
         variants = {code, code.replace('.', '')}
@@ -1053,10 +1079,12 @@ class ShifaMindModel(nn.Module):
 # LOSS FUNCTIONS
 # ============================================================================
 class ShifaMindLoss(nn.Module):
-    def __init__(self, stage='diagnosis'):
+    def __init__(self, stage='diagnosis', concept_store=None, target_codes=None):
         super().__init__()
         self.stage = stage
         self.bce_loss = nn.BCEWithLogitsLoss()
+        self.concept_store = concept_store
+        self.target_codes = target_codes
 
     def forward(self, outputs, labels, concept_labels=None):
         if self.stage == 'diagnosis':
@@ -1100,10 +1128,16 @@ class ShifaMindLoss(nn.Module):
             top_k_probs = torch.topk(concept_probs, k=12, dim=1)[0]
             confidence_loss = -torch.mean(top_k_probs)
 
+            # NEW: Diagnosis-concept alignment loss
+            alignment_loss = self._compute_alignment_loss(
+                outputs['logits'], outputs['concept_scores'], labels
+            )
+
             total_loss = (
-                0.50 * diagnosis_loss +
-                0.35 * concept_precision_loss +
-                0.15 * confidence_loss
+                0.40 * diagnosis_loss +
+                0.30 * concept_precision_loss +
+                0.15 * confidence_loss +
+                0.15 * alignment_loss
             )
 
             return {
@@ -1111,8 +1145,50 @@ class ShifaMindLoss(nn.Module):
                 'diagnosis': diagnosis_loss.item(),
                 'concept_precision': concept_precision_loss.item(),
                 'confidence': confidence_loss.item(),
+                'alignment': alignment_loss.item(),
                 'top_k_avg': top_k_probs.mean().item()
             }
+
+    def _compute_alignment_loss(self, diagnosis_logits, concept_scores, labels):
+        """
+        Enforce that concepts activated match the predicted diagnosis.
+
+        For each sample:
+        - Get predicted diagnosis
+        - Promote relevant concepts for that diagnosis
+        - Suppress irrelevant concepts
+        """
+        if self.concept_store is None or self.target_codes is None:
+            return torch.tensor(0.0, device=diagnosis_logits.device)
+
+        batch_size = diagnosis_logits.size(0)
+        num_concepts = concept_scores.size(1)
+        device = diagnosis_logits.device
+
+        # Get predicted diagnoses (hard prediction)
+        diagnosis_probs = torch.sigmoid(diagnosis_logits)
+        predicted_diagnosis_indices = torch.argmax(diagnosis_probs, dim=1)
+
+        # Build target masks for each sample
+        alignment_targets = torch.zeros_like(concept_scores)
+
+        for i in range(batch_size):
+            pred_idx = predicted_diagnosis_indices[i].item()
+            diagnosis_code = self.target_codes[pred_idx]
+
+            # Get relevant concept indices for this diagnosis
+            relevant_concepts = self.concept_store.diagnosis_to_concepts.get(diagnosis_code, [])
+
+            # Set targets: 1.0 for relevant concepts, 0.0 for irrelevant
+            for concept_idx in relevant_concepts:
+                alignment_targets[i, concept_idx] = 1.0
+
+        # Binary cross-entropy: penalize activating wrong concepts
+        alignment_loss = nn.functional.binary_cross_entropy_with_logits(
+            concept_scores, alignment_targets, reduction='mean'
+        )
+
+        return alignment_loss
 
 # ============================================================================
 # STAGED TRAINER
@@ -1272,11 +1348,19 @@ class ShifaMindTrainer:
 
     def train_stage4_joint(self, concept_labels, epochs=3, lr=1.5e-5):
         print("\n" + "="*70)
-        print("STAGE 4: JOINT FINE-TUNING")
+        print("STAGE 4: JOINT FINE-TUNING WITH ALIGNMENT")
         print("="*70)
 
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.01)
-        criterion = ShifaMindLoss(stage='joint')
+
+        # Target codes are known from dataset preparation
+        target_codes = ['J189', 'I5023', 'A419', 'K8000']
+
+        criterion = ShifaMindLoss(
+            stage='joint',
+            concept_store=self.model.concept_store,
+            target_codes=target_codes
+        )
 
         num_training_steps = epochs * len(self.train_loader)
         scheduler = get_linear_schedule_with_warmup(
@@ -1313,11 +1397,13 @@ class ShifaMindTrainer:
                 scheduler.step()
 
                 total_loss += loss_dict['total'].item()
-                for key in ['diagnosis', 'concept_precision', 'confidence', 'top_k_avg']:
-                    loss_components[key] += loss_dict[key]
+                for key in ['diagnosis', 'concept_precision', 'confidence', 'alignment', 'top_k_avg']:
+                    if key in loss_dict:
+                        loss_components[key] += loss_dict[key]
 
             avg_loss = total_loss / len(self.train_loader)
             avg_top_k = loss_components['top_k_avg'] / len(self.train_loader)
+            avg_alignment = loss_components.get('alignment', 0) / len(self.train_loader)
             epoch_time = time.time() - epoch_start
 
             val_metrics = self.evaluate(stage='joint')
@@ -1325,6 +1411,7 @@ class ShifaMindTrainer:
             print(f"  Loss: {avg_loss:.4f}")
             print(f"  Val F1: {val_metrics['macro_f1']:.4f}")
             print(f"  Top-K: {avg_top_k:.3f}")
+            print(f"  Alignment: {avg_alignment:.4f}")
             print(f"  Concepts activated: {val_metrics['avg_concepts']:.1f}")
             print(f"  Time: {epoch_time:.1f}s")
 
