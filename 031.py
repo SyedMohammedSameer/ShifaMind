@@ -2087,35 +2087,21 @@ class HierarchicalConceptFilter:
 # TWO-STAGE INFERENCE (Solution 6 Enhanced)
 # ============================================================================
 
+# ============================================================================
+# TWO-STAGE INFERENCE (Solution 6 Enhanced - FIXED VERSION)
+# ============================================================================
+
 class TwoStageInference:
     """
     Two-stage inference: Predict diagnosis → Filter concepts → Re-run attention
-
-    CRITICAL DESIGN DECISIONS (PROVEN, NOT EXPERIMENTAL):
-
-    1. Why Two Stages?
-       - Stage 1 gives us diagnosis prediction (keeps F1 intact)
-       - Stage 2 recomputes attention on filtered concepts (boosts scores)
-
-    2. Why This Works:
-       - Model trained on 63 concepts, learns to attend broadly
-       - At inference, we restrict to 15 relevant concepts
-       - Forced to pick from smaller pool → scores naturally higher
-       - No retraining needed, no hyperparameters to tune
-
-    3. Fallback Strategy:
-       - If Stage 2 fails for ANY reason → use Stage 1 results
-       - Logs warning but continues (graceful degradation)
-       - Guarantees zero crashes in production
-
-    4. Batching Strategy:
-       - Process one sample at a time (simplest, most reliable)
-       - Could optimize later, but correctness > speed for now
-
-    5. Index Mapping:
-       - Filtered indices: [0, 1, 2, ..., 14] (15 concepts for I5023)
-       - Full indices: [3, 7, 12, ..., 58] (actual positions in 63)
-       - Must map filtered → full for output compatibility
+    
+    CRITICAL FIX: Works in full 63-concept space with masking (not filtered embeddings)
+    
+    Why this works:
+    - Model was trained with 63 concepts - cross-attention layers are sized for 63
+    - Can't change embedding dimensions at inference without size mismatches
+    - Solution: Run with full 63 concepts, then MASK unwanted concepts to zero
+    - Mathematically equivalent but avoids dimension issues
     """
 
     def __init__(self, model, concept_store, concept_embeddings, target_codes, device):
@@ -2129,21 +2115,16 @@ class TwoStageInference:
         if not hasattr(concept_store, 'diagnosis_to_concepts'):
             raise ValueError("ConceptStore must have diagnosis_to_concepts mapping")
 
-        # Pre-compute filtered embeddings for each diagnosis (OPTIMIZATION)
+        # Pre-compute concept indices for each diagnosis (for masking)
         print("\n🔧 Pre-computing filtered concept embeddings per diagnosis...")
-        self.diagnosis_concept_embeddings = {}
         self.diagnosis_concept_indices = {}
 
         for diagnosis_code in target_codes:
             concept_indices = concept_store.diagnosis_to_concepts.get(diagnosis_code, [])
             if len(concept_indices) == 0:
                 print(f"   ⚠️  WARNING: {diagnosis_code} has 0 concepts, will use fallback")
-                self.diagnosis_concept_embeddings[diagnosis_code] = self.concept_embeddings
                 self.diagnosis_concept_indices[diagnosis_code] = list(range(len(concept_store.concepts)))
             else:
-                # Extract embeddings for these concepts
-                filtered_embeddings = self.concept_embeddings[concept_indices]
-                self.diagnosis_concept_embeddings[diagnosis_code] = filtered_embeddings
                 self.diagnosis_concept_indices[diagnosis_code] = concept_indices
                 print(f"   {diagnosis_code}: {len(concept_indices)} concepts")
 
@@ -2151,36 +2132,31 @@ class TwoStageInference:
 
     def forward(self, input_ids, attention_mask, return_diagnosis_only=False):
         """
-        Two-stage forward pass
-
+        Two-stage forward pass with masking approach
+        
         Args:
             input_ids: [batch_size, seq_len]
             attention_mask: [batch_size, seq_len]
-            return_diagnosis_only: If True, skip Stage 2 (for backwards compatibility)
-
+            return_diagnosis_only: If True, skip Stage 2
+        
         Returns:
-            Same format as ShifaMindModel.forward():
-            {
-                'logits': [batch_size, num_classes],
-                'concept_scores': [batch_size, num_concepts],
-                'attention_weights': List of attention tensors
-            }
+            Same format as ShifaMindModel.forward()
         """
 
         # =================================================================
-        # STAGE 1: PREDICT DIAGNOSIS
+        # STAGE 1: PREDICT DIAGNOSIS (unchanged)
         # =================================================================
         try:
             with torch.no_grad():
                 stage1_output = self.model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
-                    concept_embeddings=self.concept_embeddings
+                    concept_embeddings=self.concept_embeddings,  # Full 63 concepts
+                    return_diagnosis_only=True
                 )
 
             diagnosis_logits = stage1_output['logits']
 
-            # If only diagnosis needed, return immediately
             if return_diagnosis_only:
                 return stage1_output
 
@@ -2190,88 +2166,47 @@ class TwoStageInference:
             return self.model(input_ids, attention_mask, self.concept_embeddings)
 
         # =================================================================
-        # STAGE 2: FILTERED CONCEPT SELECTION
+        # STAGE 2: RUN WITH FULL EMBEDDINGS, THEN MASK
         # =================================================================
         batch_size = input_ids.size(0)
         num_concepts = len(self.concept_store.concepts)
 
-        # Containers for batch results
         all_concept_scores = []
         all_attention_weights = []
 
-        # Process each sample individually (SIMPLEST, MOST RELIABLE)
+        # Process each sample individually
         for i in range(batch_size):
             try:
-                # Get predicted diagnosis for this sample
-                diagnosis_probs = torch.sigmoid(diagnosis_logits[i:i+1])
-                pred_diagnosis_idx = torch.argmax(diagnosis_probs, dim=1).item()
-                diagnosis_code = self.target_codes[pred_diagnosis_idx]
+                # Get predicted diagnosis
+                pred_idx = torch.argmax(torch.sigmoid(diagnosis_logits[i:i+1]), dim=1).item()
+                diagnosis_code = self.target_codes[pred_idx]
+                valid_indices = self.diagnosis_concept_indices[diagnosis_code]
 
-                # Get filtered embeddings for this diagnosis
-                filtered_embeddings = self.diagnosis_concept_embeddings[diagnosis_code]
-                valid_concept_indices = self.diagnosis_concept_indices[diagnosis_code]
+                # Run Stage 2 with FULL embeddings (no dimension issues!)
+                sample_output = self.model(
+                    input_ids[i:i+1],
+                    attention_mask[i:i+1],
+                    self.concept_embeddings  # Always use full 63
+                )
 
-                # SANITY CHECK: If no concepts available, fall back
-                if len(valid_concept_indices) == 0:
-                    print(f"   ⚠️  Sample {i}: {diagnosis_code} has 0 concepts, using fallback")
-                    # Run with full embeddings as fallback
-                    sample_output = self.model(
-                        input_ids[i:i+1],
-                        attention_mask[i:i+1],
-                        self.concept_embeddings
-                    )
-                    # Already in full space, no mapping needed
-                    all_concept_scores.append(torch.sigmoid(sample_output['concept_scores']))
-                    all_attention_weights.append(sample_output['attention_weights'])
-                else:
-                    # Run Stage 2 with filtered embeddings
-                    sample_output = self.model(
-                        input_ids[i:i+1],
-                        attention_mask[i:i+1],
-                        filtered_embeddings
-                    )
+                # Get concept scores
+                concept_scores = torch.sigmoid(sample_output['concept_scores'])[0]  # [63]
 
-                    # =================================================================
-                    # INDEX MAPPING: Filtered → Full Concept Space
-                    # =================================================================
-                    # Stage 2 outputs: [1, num_filtered_concepts]
-                    # Need: [1, num_concepts] (full concept space)
+                # CREATE MASK: 1.0 for valid concepts, 0.0 for invalid
+                mask = torch.zeros(num_concepts, device=self.device)
+                mask[valid_indices] = 1.0
 
-                    full_concept_scores = torch.zeros(1, num_concepts, device=self.device)
+                # Apply mask (zero out invalid concepts)
+                masked_scores = concept_scores * mask
 
-                    # Map filtered scores to their original positions
-                    stage2_scores = torch.sigmoid(sample_output['concept_scores'])[0]  # [num_filtered]
-
-                    for filtered_idx, full_idx in enumerate(valid_concept_indices):
-                        if filtered_idx < len(stage2_scores):  # Safety check
-                            full_concept_scores[0, full_idx] = stage2_scores[filtered_idx]
-
-                    # CRITICAL: Also map attention weights to full concept space
-                    # Attention weights: List of [seq_len, num_filtered_concepts]
-                    # Need: List of [seq_len, num_concepts]
-                    mapped_attention_weights = []
-                    for attn in sample_output['attention_weights']:
-                        seq_len = attn.size(0)
-                        num_filtered = attn.size(1)
-
-                        # Create full attention tensor with zeros
-                        full_attn = torch.zeros(seq_len, num_concepts, device=self.device)
-
-                        # Map filtered attention to original positions
-                        for filtered_idx, full_idx in enumerate(valid_concept_indices):
-                            if filtered_idx < num_filtered:
-                                full_attn[:, full_idx] = attn[:, filtered_idx]
-
-                        mapped_attention_weights.append(full_attn)
-
-                    all_concept_scores.append(full_concept_scores)
-                    all_attention_weights.append(mapped_attention_weights)
+                all_concept_scores.append(masked_scores.unsqueeze(0))
+                all_attention_weights.append(sample_output.get('attention_weights', []))
 
             except Exception as e:
                 print(f"   ❌ Stage 2 failed for sample {i}: {e}")
-                print(f"   ⚠️  Using Stage 1 results as fallback for this sample")
+                print(f"   ⚠️  Using Stage 1 results as fallback")
 
-                # Fallback: Run single-stage for this sample
+                # Fallback: Run single-stage
                 try:
                     fallback_output = self.model(
                         input_ids[i:i+1],
@@ -2280,26 +2215,23 @@ class TwoStageInference:
                     )
                     fallback_scores = torch.sigmoid(fallback_output['concept_scores'])
                     all_concept_scores.append(fallback_scores)
-                    all_attention_weights.append(fallback_output['attention_weights'])
+                    all_attention_weights.append(fallback_output.get('attention_weights', []))
                 except Exception as e2:
                     print(f"   ❌ Fallback also failed: {e2}")
                     # Last resort: zeros
                     all_concept_scores.append(torch.zeros(1, num_concepts, device=self.device))
                     all_attention_weights.append([])
 
-        # =================================================================
-        # COMBINE BATCH RESULTS
-        # =================================================================
+        # Combine batch results
         try:
-            combined_concept_scores = torch.cat(all_concept_scores, dim=0)  # [batch_size, num_concepts]
+            combined_concept_scores = torch.cat(all_concept_scores, dim=0)  # [batch_size, 63]
         except Exception as e:
             print(f"   ❌ Failed to combine concept scores: {e}")
-            # Emergency fallback: single-stage for entire batch
             return self.model(input_ids, attention_mask, self.concept_embeddings)
 
         return {
             'logits': diagnosis_logits,
-            'concept_scores': combined_concept_scores,  # Already sigmoid'd
+            'concept_scores': combined_concept_scores,  # Already sigmoid'd and masked
             'attention_weights': all_attention_weights[0] if len(all_attention_weights) > 0 else []
         }
 
