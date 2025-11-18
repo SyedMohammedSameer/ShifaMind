@@ -2,16 +2,15 @@
 """
 ShifaMind Demo Script
 
-Loads a trained ShifaMind model and runs inference with explainability.
+Loads trained ShifaMind model from 032.py and runs inference.
 
 Usage:
   python 033.py
 
 Outputs:
   - Diagnosis predictions with confidence scores
-  - Activated medical concepts (CUI + name + score)
+  - Activated medical concepts (by CUI)
   - Evidence spans from clinical text supporting each concept
-  - Clean, filtered concepts matching the predicted diagnosis
 """
 
 import torch
@@ -19,17 +18,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from transformers import AutoTokenizer, AutoModel
-import json
-import pickle
-from pathlib import Path
-from typing import Dict, List
 import re
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 MODEL_PATH = 'stage4_joint_best_revised.pt'
-CONCEPT_STORE_PATH = 'concept_store.pkl'  # Will be saved during training
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Target diagnoses
@@ -42,7 +36,7 @@ ICD_DESCRIPTIONS = {
 }
 
 # ============================================================================
-# MODEL COMPONENTS
+# MODEL COMPONENTS (copied from 032.py)
 # ============================================================================
 class EnhancedCrossAttention(nn.Module):
     """Cross-attention between clinical text and medical concepts"""
@@ -121,20 +115,13 @@ class ShifaMindModel(nn.Module):
 
         self.dropout = nn.Dropout(0.1)
 
-    def forward(self, input_ids, attention_mask, concept_embeddings,
-                return_diagnosis_only=False):
+    def forward(self, input_ids, attention_mask, concept_embeddings):
         outputs = self.base_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             output_hidden_states=True,
             return_dict=True
         )
-
-        if return_diagnosis_only:
-            cls_hidden = outputs.last_hidden_state[:, 0, :]
-            cls_hidden = self.dropout(cls_hidden)
-            diagnosis_logits = self.diagnosis_head(cls_hidden)
-            return {'logits': diagnosis_logits}
 
         hidden_states = outputs.hidden_states
         current_hidden = hidden_states[-1]
@@ -170,69 +157,30 @@ class ShifaMindModel(nn.Module):
         }
 
 
-class ConceptFilter:
-    """Filters concepts to match predicted diagnosis"""
-
-    def __init__(self, concept_store, target_codes):
-        self.concept_store = concept_store
-        self.target_codes = target_codes
-
-    def filter_concept_scores(self, diagnosis_logits, concept_scores):
-        """Zero out concepts that don't match predicted diagnosis"""
-        batch_size = diagnosis_logits.size(0)
-        num_concepts = concept_scores.size(1)
-        device = diagnosis_logits.device
-
-        diagnosis_probs = torch.sigmoid(diagnosis_logits)
-        pred_diagnosis_idx = torch.argmax(diagnosis_probs, dim=1)
-
-        filtered_scores = concept_scores.clone()
-
-        for i in range(batch_size):
-            pred_idx = pred_diagnosis_idx[i].item()
-            diagnosis_code = self.target_codes[pred_idx]
-
-            valid_indices = self.concept_store.get('diagnosis_to_concepts', {}).get(
-                diagnosis_code, []
-            )
-
-            if valid_indices:
-                mask = torch.zeros(num_concepts, device=device)
-                mask[valid_indices] = 1.0
-                filtered_scores[i] = filtered_scores[i] * mask
-
-        return filtered_scores
-
-
 class EvidenceExtractor:
     """Extracts evidence spans from clinical text using attention weights"""
 
-    def __init__(self, tokenizer, concept_store,
+    def __init__(self, tokenizer,
                  attention_percentile=85,
                  min_span_tokens=5,
                  max_span_tokens=50,
                  top_k_spans=3):
         self.tokenizer = tokenizer
-        self.concept_store = concept_store
         self.attention_percentile = attention_percentile
         self.min_span_tokens = min_span_tokens
         self.max_span_tokens = max_span_tokens
         self.top_k_spans = top_k_spans
 
-    def extract(self, input_ids, attention_weights, concept_scores, threshold=0.7):
+    def extract(self, input_ids, attention_weights, concept_scores, concept_cuis, threshold=0.7):
         """Extract evidence spans for activated concepts"""
 
         # Get activated concepts
         activated = []
-        concept_list = list(self.concept_store['concepts'].keys())
-
         for idx, score in enumerate(concept_scores):
-            if score > threshold and idx < len(concept_list):
-                cui = concept_list[idx]
+            if score > threshold and idx < len(concept_cuis):
                 activated.append({
                     'idx': idx,
-                    'cui': cui,
-                    'name': self.concept_store['concepts'][cui]['name'],
+                    'cui': concept_cuis[idx],
                     'score': float(score)
                 })
 
@@ -250,8 +198,8 @@ class EvidenceExtractor:
             concept_attention = aggregated_attention[:, concept_idx]
 
             # Find high-attention tokens
-            threshold = torch.quantile(concept_attention, self.attention_percentile / 100.0)
-            high_attention_mask = concept_attention >= threshold
+            threshold_val = torch.quantile(concept_attention, self.attention_percentile / 100.0)
+            high_attention_mask = concept_attention >= threshold_val
 
             # Extract spans
             spans = self._find_spans(
@@ -288,7 +236,6 @@ class EvidenceExtractor:
             if decoded_spans:
                 results.append({
                     'concept_cui': concept_info['cui'],
-                    'concept_name': concept_info['name'],
                     'concept_score': concept_info['score'],
                     'evidence_spans': decoded_spans
                 })
@@ -340,13 +287,16 @@ def load_model():
     """Load trained ShifaMind model"""
     print("Loading model...")
 
-    # Load concept store
-    with open(CONCEPT_STORE_PATH, 'rb') as f:
-        concept_store = pickle.load(f)
+    # Load checkpoint
+    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
 
-    num_concepts = len(concept_store['concepts'])
+    # Get metadata
+    concept_cuis = checkpoint['concept_cuis']
+    num_concepts = checkpoint['num_concepts']
 
-    # Initialize model
+    print(f"✅ Model loaded: {num_concepts} concepts, 4 diagnoses")
+
+    # Initialize model architecture
     base_model = AutoModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
     model = ShifaMindModel(
         base_model=base_model,
@@ -355,21 +305,22 @@ def load_model():
         fusion_layers=[9, 11]
     )
 
-    # Load weights
-    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
+    # Load trained weights
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(DEVICE)
     model.eval()
 
-    # Load concept embeddings
-    concept_embeddings = checkpoint['concept_embeddings'].to(DEVICE)
+    # Get concept embeddings (saved in checkpoint by 032.py)
+    if 'concept_embeddings' in checkpoint:
+        concept_embeddings = checkpoint['concept_embeddings'].to(DEVICE)
+    else:
+        print("⚠️  Warning: concept_embeddings not in checkpoint, model may not work correctly")
+        concept_embeddings = None
 
-    print(f"✅ Model loaded: {num_concepts} concepts, 4 diagnoses")
-
-    return model, concept_store, concept_embeddings
+    return model, concept_cuis, concept_embeddings
 
 
-def predict(clinical_text, model, concept_store, concept_embeddings, tokenizer):
+def predict(clinical_text, model, concept_cuis, concept_embeddings, tokenizer):
     """Run inference on clinical text"""
 
     # Tokenize
@@ -395,22 +346,16 @@ def predict(clinical_text, model, concept_store, concept_embeddings, tokenizer):
     diagnosis_code = TARGET_CODES[diagnosis_pred_idx]
     diagnosis_score = float(diagnosis_probs[diagnosis_pred_idx])
 
-    # Filter concepts
-    concept_filter = ConceptFilter(concept_store, TARGET_CODES)
-    concept_scores_raw = torch.sigmoid(outputs['concept_scores'])
-    concept_scores_filtered = concept_filter.filter_concept_scores(
-        outputs['logits'],
-        concept_scores_raw
-    )
-    concept_scores = concept_scores_filtered.cpu().numpy()[0]
+    concept_scores = torch.sigmoid(outputs['concept_scores']).cpu().numpy()[0]
 
     # Extract evidence
-    evidence_extractor = EvidenceExtractor(tokenizer, concept_store)
+    evidence_extractor = EvidenceExtractor(tokenizer)
     sample_attention_weights = [attn[0] for attn in outputs['attention_weights']]
     evidence = evidence_extractor.extract(
         encoding['input_ids'][0].cpu(),
         sample_attention_weights,
-        concept_scores
+        concept_scores,
+        concept_cuis
     )
 
     return {
@@ -432,7 +377,7 @@ def print_results(result):
 
     print(f"\n💡 Activated Concepts ({len(result['evidence'])} total):")
     for i, extraction in enumerate(result['evidence'], 1):
-        print(f"\n  [{i}] {extraction['concept_name']} (CUI: {extraction['concept_cui']})")
+        print(f"\n  [{i}] CUI: {extraction['concept_cui']}")
         print(f"      Concept Score: {extraction['concept_score']:.3f}")
         print(f"      Evidence Spans ({len(extraction['evidence_spans'])} found):")
 
@@ -448,7 +393,13 @@ def main():
     print("ShifaMind Demo - Medical Diagnosis with Explainability\n")
 
     # Load
-    model, concept_store, concept_embeddings = load_model()
+    model, concept_cuis, concept_embeddings = load_model()
+
+    if concept_embeddings is None:
+        print("\n❌ Error: Concept embeddings not found in checkpoint.")
+        print("Make sure you're using a checkpoint from 032.py that includes concept_embeddings.")
+        return
+
     tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
 
     # Example clinical text
@@ -464,7 +415,7 @@ def main():
     print(clinical_text)
 
     # Predict
-    result = predict(clinical_text, model, concept_store, concept_embeddings, tokenizer)
+    result = predict(clinical_text, model, concept_cuis, concept_embeddings, tokenizer)
 
     # Display
     print_results(result)
