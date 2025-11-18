@@ -1504,6 +1504,7 @@ class ShifaMindTrainer:
                     'model_state_dict': self.model.state_dict(),
                     'concept_cuis': list(self.model.concept_store.concepts.keys()),
                     'num_concepts': len(self.model.concept_store.concepts),
+                    'concept_embeddings': self.concept_embeddings.cpu(),
                     'f1_score': best_f1
                 }
                 torch.save(checkpoint, 'stage4_joint_best_revised.pt')
