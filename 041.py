@@ -21,7 +21,8 @@ Version: 041
 """
 
 # ============================================================================
-# 1. IMPORTS
+# @title 1. Setup & Imports
+# @markdown Install dependencies and configure environment
 # ============================================================================
 
 import os
@@ -57,7 +58,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"🖥️  Device: {device}")
 
 # ============================================================================
-# 2. CONFIGURATION WITH EXACT PATHS
+# @title 2. Configuration & Paths
+# @markdown Configure paths, settings, and target diagnoses
 # ============================================================================
 
 # Base paths for Google Drive structure
@@ -117,7 +119,8 @@ print(f"🎯 Demo Mode: {'ON' if DEMO_MODE else 'OFF'}")
 print(f"📦 Using Cache: {'YES' if USE_CACHE else 'NO'}")
 
 # ============================================================================
-# 3. DATA VALIDATION
+# @title 3. Data Validation
+# @markdown Validate all required data files and directories exist
 # ============================================================================
 
 def validate_data_structure():
@@ -168,7 +171,8 @@ def validate_data_structure():
 validate_data_structure()
 
 # ============================================================================
-# 4. OPTIMIZED DATA LOADING
+# @title 4. Optimized Data Loading
+# @markdown Load UMLS, MIMIC-IV, and ICD-10 data with caching support
 # ============================================================================
 
 class OptimizedDataLoader:
@@ -381,7 +385,8 @@ class MIMICLoader:
 
 
 # ============================================================================
-# 5. OUTPUT MANAGER
+# @title 5. Output Management
+# @markdown Organize results, metrics, and model checkpoints
 # ============================================================================
 
 class OutputManager:
@@ -449,7 +454,8 @@ class OutputManager:
 output_manager = OutputManager(OUTPUT_PATH)
 
 # ============================================================================
-# 6. FIX 1A: AGGRESSIVE POST-PROCESSING FILTER
+# @title 6. FIX 1A: Aggressive Post-Processing Filter
+# @markdown 3-tier filtering to prevent wrong concept activation
 # ============================================================================
 
 class ConceptPostProcessor:
@@ -527,7 +533,8 @@ class ConceptPostProcessor:
 
 
 # ============================================================================
-# 7. FIX 2A: CITATION COMPLETENESS METRIC
+# @title 7. FIX 2A: Citation Completeness Metric
+# @markdown Measure quality and coverage of concept citations
 # ============================================================================
 
 class CitationMetrics:
@@ -595,7 +602,8 @@ class CitationMetrics:
 
 
 # ============================================================================
-# 8. FIX 3A: ALIGNMENT SCORE (JACCARD SIMILARITY)
+# @title 8. FIX 3A: Alignment Score (Jaccard Similarity)
+# @markdown Quantify concept-evidence alignment using Jaccard similarity
 # ============================================================================
 
 class AlignmentEvaluator:
@@ -652,7 +660,8 @@ class AlignmentEvaluator:
 
 
 # ============================================================================
-# 9. FIX 4A: TEMPLATE-BASED REASONING CHAIN GENERATION
+# @title 9. FIX 4A: Template-Based Reasoning Chain Generation
+# @markdown Generate human-readable diagnostic explanations
 # ============================================================================
 
 class ReasoningChainGenerator:
@@ -749,8 +758,8 @@ class ReasoningChainGenerator:
 
 
 # ============================================================================
-# 10. CONTINUE WITH MODEL ARCHITECTURE AND TRAINING
-# (Same as 040.py but with integrated fixes)
+# @title 10. Data Loading & Preparation
+# @markdown Load and prepare UMLS, MIMIC-IV data with optimized caching
 # ============================================================================
 
 print("\n" + "="*70)
