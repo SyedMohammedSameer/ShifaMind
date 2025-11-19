@@ -1290,7 +1290,566 @@ print(f"  Model parameters: {sum(p.numel() for p in shifamind_model.parameters()
 print("✅ Model architecture defined")
 
 # ============================================================================
-# @title 13. Complete Evaluation with All Fixes
+# @title 12.5. PMI-Based Concept Labeling
+# @markdown Generate diagnosis-conditional concept labels
+# ============================================================================
+
+print("\n" + "="*70)
+print("PMI-BASED CONCEPT LABELING")
+print("="*70)
+
+class DiagnosisConditionalLabeler:
+    """Generate concept labels using PMI (Pointwise Mutual Information)"""
+
+    def __init__(self, concept_store, icd_to_cui, pmi_threshold=1.0):
+        self.concept_store = concept_store
+        self.icd_to_cui = icd_to_cui
+        self.pmi_threshold = pmi_threshold
+        self.diagnosis_counts = defaultdict(int)
+        self.concept_counts = defaultdict(int)
+        self.diagnosis_concept_counts = defaultdict(lambda: defaultdict(int))
+        self.total_pairs = 0
+        self.pmi_scores = {}
+
+    def build_cooccurrence_statistics(self, df_train, target_codes):
+        """Build diagnosis-concept co-occurrence statistics"""
+        print("\n📊 Building co-occurrence statistics...")
+
+        for idx, row in tqdm(df_train.iterrows(), total=len(df_train), desc="  Processing"):
+            diagnosis_codes = row['icd_codes']
+            note_concepts = set()
+
+            for dx_code in diagnosis_codes:
+                self.diagnosis_counts[dx_code] += 1
+
+                dx_variants = self._get_icd_variants(dx_code)
+                for variant in dx_variants:
+                    if variant in self.icd_to_cui:
+                        cuis = self.icd_to_cui[variant]
+                        valid_cuis = [cui for cui in cuis if cui in self.concept_store.concepts]
+                        note_concepts.update(valid_cuis)
+
+            for concept_cui in note_concepts:
+                self.concept_counts[concept_cui] += 1
+                for dx_code in diagnosis_codes:
+                    self.diagnosis_concept_counts[dx_code][concept_cui] += 1
+                    self.total_pairs += 1
+
+        print(f"  ✅ Unique diagnoses: {len(self.diagnosis_counts)}")
+        print(f"  ✅ Unique concepts: {len(self.concept_counts)}")
+        print(f"  ✅ Total co-occurrences: {self.total_pairs}")
+
+        return self._compute_pmi_scores()
+
+    def _compute_pmi_scores(self):
+        """Compute PMI scores"""
+        print("\n  Computing PMI scores...")
+
+        total_diagnoses = sum(self.diagnosis_counts.values())
+        total_concepts = sum(self.concept_counts.values())
+
+        for dx_code in tqdm(self.diagnosis_counts.keys(), desc="  PMI"):
+            p_dx = self.diagnosis_counts[dx_code] / total_diagnoses
+
+            for concept_cui in self.concept_counts.keys():
+                cooccur_count = self.diagnosis_concept_counts[dx_code].get(concept_cui, 0)
+                if cooccur_count == 0:
+                    continue
+
+                p_dx_concept = cooccur_count / self.total_pairs
+                p_concept = self.concept_counts[concept_cui] / total_concepts
+
+                pmi = math.log(p_dx_concept / (p_dx * p_concept + 1e-10) + 1e-10)
+
+                if pmi > self.pmi_threshold:
+                    self.pmi_scores[(dx_code, concept_cui)] = pmi
+
+        print(f"  ✅ Computed {len(self.pmi_scores)} significant PMI scores")
+
+        concepts_with_pmi = set()
+        for (dx_code, concept_cui) in self.pmi_scores.keys():
+            concepts_with_pmi.add(concept_cui)
+
+        return concepts_with_pmi
+
+    def generate_labels(self, diagnosis_codes: List[str]) -> List[int]:
+        """Generate concept labels for a sample"""
+        concept_scores = defaultdict(float)
+
+        for dx_code in diagnosis_codes:
+            for concept_cui in self.concept_store.concepts.keys():
+                key = (dx_code, concept_cui)
+                if key in self.pmi_scores:
+                    concept_scores[concept_cui] = max(
+                        concept_scores[concept_cui],
+                        self.pmi_scores[key]
+                    )
+
+        labels = []
+        concept_ids = list(self.concept_store.concepts.keys())
+
+        for cui in concept_ids:
+            label = 1 if concept_scores[cui] > 0 else 0
+            labels.append(label)
+
+        return labels
+
+    def generate_dataset_labels(self, df_data, cache_file: str = None) -> np.ndarray:
+        """Generate labels for entire dataset with caching"""
+
+        if cache_file and os.path.exists(cache_file):
+            print(f"\n📦 Loading cached labels from {cache_file}...")
+            with open(cache_file, 'rb') as f:
+                return pickle.load(f)
+
+        print(f"\n🏷️  Generating labels for {len(df_data)} samples...")
+
+        all_labels = []
+        for row in tqdm(df_data.itertuples(), total=len(df_data), desc="  Labeling"):
+            labels = self.generate_labels(row.icd_codes)
+            all_labels.append(labels)
+
+        all_labels = np.array(all_labels)
+
+        if cache_file:
+            with open(cache_file, 'wb') as f:
+                pickle.dump(all_labels, f)
+            print(f"  💾 Cached labels to {cache_file}")
+
+        print(f"  ✅ Generated labels: {all_labels.shape}")
+        print(f"  📊 Avg labels per sample: {all_labels.sum(axis=1).mean():.1f}")
+
+        return all_labels
+
+    def _get_icd_variants(self, code: str) -> List[str]:
+        variants = {code, code.replace('.', '')}
+        no_dots = code.replace('.', '')
+        if len(no_dots) >= 4:
+            variants.add(no_dots[:3] + '.' + no_dots[3:])
+        variants.add(no_dots[:3])
+        return list(variants)
+
+
+# Build PMI labeler
+print("\nBuilding diagnosis-conditional labeler...")
+diagnosis_labeler = DiagnosisConditionalLabeler(concept_store, umls_loader_instance.icd10_to_cui, pmi_threshold=1.0)
+concepts_with_pmi = diagnosis_labeler.build_cooccurrence_statistics(df_train, TARGET_CODES)
+
+print("\n✅ PMI labeler complete")
+
+# ============================================================================
+# @title 13. Training Stage 1: Diagnosis Head
+# @markdown Train diagnosis prediction head (3 epochs)
+# ============================================================================
+
+print("\n" + "="*70)
+print("STAGE 1: DIAGNOSIS HEAD TRAINING")
+print("="*70)
+
+# Check if checkpoint exists
+if CHECKPOINT_DIAGNOSIS.exists():
+    print(f"\n✅ Found existing checkpoint: {CHECKPOINT_DIAGNOSIS}")
+    print("Skipping Stage 1 (already trained)")
+    checkpoint = torch.load(CHECKPOINT_DIAGNOSIS, map_location=device)
+    shifamind_model.load_state_dict(checkpoint['model_state_dict'])
+else:
+    print("\nPreparing data loaders...")
+    train_dataset = ClinicalDataset(
+        df_train['text'].tolist(),
+        df_train['labels'].tolist(),
+        tokenizer
+    )
+    val_dataset = ClinicalDataset(
+        df_val['text'].tolist(),
+        df_val['labels'].tolist(),
+        tokenizer
+    )
+
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=16)
+
+    print("\nStarting Stage 1 training...")
+    optimizer = torch.optim.AdamW(shifamind_model.parameters(), lr=2e-5, weight_decay=0.01)
+    criterion = nn.BCEWithLogitsLoss()
+
+    num_training_steps = 3 * len(train_loader)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=num_training_steps // 10,
+        num_training_steps=num_training_steps
+    )
+
+    best_f1 = 0
+
+    for epoch in range(3):
+        print(f"\nEpoch {epoch+1}/3")
+
+        shifamind_model.train()
+        total_loss = 0
+
+        for batch in tqdm(train_loader, desc="Training"):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+
+            optimizer.zero_grad()
+
+            outputs = shifamind_model(
+                input_ids, attention_mask, concept_embeddings,
+                return_diagnosis_only=True
+            )
+
+            loss = criterion(outputs['logits'], labels)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(shifamind_model.parameters(), max_norm=1.0)
+
+            optimizer.step()
+            scheduler.step()
+
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(train_loader)
+
+        # Validation
+        shifamind_model.eval()
+        all_preds = []
+        all_labels = []
+
+        with torch.no_grad():
+            for batch in tqdm(val_loader, desc="Validation"):
+                input_ids = batch['input_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                labels = batch['labels'].to(device)
+
+                outputs = shifamind_model(
+                    input_ids, attention_mask, concept_embeddings,
+                    return_diagnosis_only=True
+                )
+
+                preds = torch.sigmoid(outputs['logits']).cpu().numpy()
+                all_preds.append(preds)
+                all_labels.append(labels.cpu().numpy())
+
+        all_preds = np.vstack(all_preds)
+        all_labels = np.vstack(all_labels)
+        pred_binary = (all_preds > 0.5).astype(int)
+
+        macro_f1 = f1_score(all_labels, pred_binary, average='macro', zero_division=0)
+
+        print(f"  Loss: {avg_loss:.4f}")
+        print(f"  Val Macro F1: {macro_f1:.4f}")
+
+        if macro_f1 > best_f1:
+            best_f1 = macro_f1
+
+            # Save checkpoint
+            torch.save({
+                'model_state_dict': shifamind_model.state_dict(),
+                'num_concepts': len(concept_store.concepts),
+                'concept_cuis': list(concept_store.concepts.keys()),
+                'concept_names': {cui: info['preferred_name'] for cui, info in concept_store.concepts.items()},
+                'concept_embeddings': concept_embeddings,
+                'macro_f1': best_f1
+            }, CHECKPOINT_DIAGNOSIS)
+            print(f"  ✅ Saved checkpoint: {CHECKPOINT_DIAGNOSIS} (F1: {best_f1:.4f})")
+
+    print(f"\n✅ Stage 1 complete. Best F1: {best_f1:.4f}")
+
+torch.cuda.empty_cache()
+
+# ============================================================================
+# @title 14. Training Stage 2: Generate Concept Labels
+# @markdown Generate diagnosis-conditional concept labels using PMI
+# ============================================================================
+
+print("\n" + "="*70)
+print("STAGE 2: GENERATING DIAGNOSIS-CONDITIONAL LABELS")
+print("="*70)
+
+# Generate labels for all splits
+train_concept_labels = diagnosis_labeler.generate_dataset_labels(
+    df_train,
+    cache_file=str(OUTPUT_PATH / 'concept_labels_train.pkl')
+)
+
+val_concept_labels = diagnosis_labeler.generate_dataset_labels(
+    df_val,
+    cache_file=str(OUTPUT_PATH / 'concept_labels_val.pkl')
+)
+
+test_concept_labels = diagnosis_labeler.generate_dataset_labels(
+    df_test,
+    cache_file=str(OUTPUT_PATH / 'concept_labels_test.pkl')
+)
+
+print("\n✅ Stage 2 complete")
+
+# ============================================================================
+# @title 15. Training Stage 3: Concept Head
+# @markdown Train concept prediction head (2 epochs)
+# ============================================================================
+
+print("\n" + "="*70)
+print("STAGE 3: CONCEPT HEAD TRAINING")
+print("="*70)
+
+if CHECKPOINT_CONCEPTS.exists():
+    print(f"\n✅ Found existing checkpoint: {CHECKPOINT_CONCEPTS}")
+    print("Skipping Stage 3 (already trained)")
+    checkpoint = torch.load(CHECKPOINT_CONCEPTS, map_location=device)
+    shifamind_model.load_state_dict(checkpoint['model_state_dict'])
+else:
+    print("\nPreparing data loaders with concept labels...")
+    train_dataset = ClinicalDataset(
+        df_train['text'].tolist(),
+        df_train['labels'].tolist(),
+        tokenizer,
+        concept_labels=train_concept_labels
+    )
+    val_dataset = ClinicalDataset(
+        df_val['text'].tolist(),
+        df_val['labels'].tolist(),
+        tokenizer,
+        concept_labels=val_concept_labels
+    )
+
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=16)
+
+    print("\nStarting Stage 3 training...")
+    optimizer = torch.optim.AdamW(shifamind_model.parameters(), lr=2e-5, weight_decay=0.01)
+    criterion = nn.BCEWithLogitsLoss()
+
+    best_concept_f1 = 0
+
+    for epoch in range(2):
+        print(f"\nEpoch {epoch+1}/2")
+
+        shifamind_model.train()
+        total_loss = 0
+
+        for batch in tqdm(train_loader, desc="Training"):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            concept_labels_batch = batch['concept_labels'].to(device)
+
+            optimizer.zero_grad()
+
+            outputs = shifamind_model(input_ids, attention_mask, concept_embeddings)
+
+            # Concept loss
+            concept_loss = criterion(outputs['concept_scores'], concept_labels_batch)
+
+            # Confidence boost
+            concept_probs = torch.sigmoid(outputs['concept_scores'])
+            top_k_probs = torch.topk(concept_probs, k=min(12, concept_probs.size(1)), dim=1)[0]
+            confidence_loss = -torch.mean(top_k_probs)
+
+            loss = 0.7 * concept_loss + 0.3 * confidence_loss
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(shifamind_model.parameters(), max_norm=1.0)
+
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(train_loader)
+
+        # Validation
+        shifamind_model.eval()
+        all_concept_preds = []
+        all_concept_labels = []
+
+        with torch.no_grad():
+            for batch in tqdm(val_loader, desc="Validation"):
+                input_ids = batch['input_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                concept_labels_batch = batch['concept_labels'].to(device)
+
+                outputs = shifamind_model(input_ids, attention_mask, concept_embeddings)
+
+                concept_preds = torch.sigmoid(outputs['concept_scores']).cpu().numpy()
+                all_concept_preds.append(concept_preds)
+                all_concept_labels.append(concept_labels_batch.cpu().numpy())
+
+        all_concept_preds = np.vstack(all_concept_preds)
+        all_concept_labels = np.vstack(all_concept_labels)
+        concept_pred_binary = (all_concept_preds > 0.7).astype(int)
+
+        concept_f1 = f1_score(all_concept_labels, concept_pred_binary, average='macro', zero_division=0)
+
+        print(f"  Loss: {avg_loss:.4f}")
+        print(f"  Val Concept F1: {concept_f1:.4f}")
+
+        if concept_f1 > best_concept_f1:
+            best_concept_f1 = concept_f1
+
+            torch.save({
+                'model_state_dict': shifamind_model.state_dict(),
+                'num_concepts': len(concept_store.concepts),
+                'concept_cuis': list(concept_store.concepts.keys()),
+                'concept_names': {cui: info['preferred_name'] for cui, info in concept_store.concepts.items()},
+                'concept_embeddings': concept_embeddings,
+                'concept_f1': best_concept_f1
+            }, CHECKPOINT_CONCEPTS)
+            print(f"  ✅ Saved checkpoint: {CHECKPOINT_CONCEPTS} (F1: {best_concept_f1:.4f})")
+
+    print(f"\n✅ Stage 3 complete. Best Concept F1: {best_concept_f1:.4f}")
+
+torch.cuda.empty_cache()
+
+# ============================================================================
+# @title 16. Training Stage 4: Joint Training
+# @markdown Joint fine-tuning with alignment loss (3 epochs)
+# ============================================================================
+
+print("\n" + "="*70)
+print("STAGE 4: JOINT FINE-TUNING WITH ALIGNMENT")
+print("="*70)
+
+class AlignmentLoss(nn.Module):
+    """Alignment loss to enforce diagnosis-concept matching"""
+
+    def __init__(self, concept_store, target_codes):
+        super().__init__()
+        self.concept_store = concept_store
+        self.target_codes = target_codes
+        self.bce_loss = nn.BCEWithLogitsLoss()
+
+    def forward(self, diagnosis_logits, concept_scores, diagnosis_labels, concept_labels):
+        # Diagnosis loss
+        diagnosis_loss = self.bce_loss(diagnosis_logits, diagnosis_labels)
+
+        # Concept precision loss
+        concept_precision_loss = self.bce_loss(concept_scores, concept_labels)
+
+        # Confidence boost
+        concept_probs = torch.sigmoid(concept_scores)
+        top_k_probs = torch.topk(concept_probs, k=min(12, concept_probs.size(1)), dim=1)[0]
+        confidence_loss = -torch.mean(top_k_probs)
+
+        # Total loss
+        total_loss = (
+            0.50 * diagnosis_loss +
+            0.25 * concept_precision_loss +
+            0.25 * confidence_loss
+        )
+
+        return total_loss, {
+            'diagnosis': diagnosis_loss.item(),
+            'concept': concept_precision_loss.item(),
+            'confidence': confidence_loss.item()
+        }
+
+
+if CHECKPOINT_FINAL.exists():
+    print(f"\n✅ Found existing checkpoint: {CHECKPOINT_FINAL}")
+    print("Skipping Stage 4 (already trained)")
+    checkpoint = torch.load(CHECKPOINT_FINAL, map_location=device)
+    shifamind_model.load_state_dict(checkpoint['model_state_dict'])
+else:
+    print("\nStarting Stage 4 training...")
+
+    optimizer = torch.optim.AdamW(shifamind_model.parameters(), lr=2e-5, weight_decay=0.01)
+    criterion = AlignmentLoss(concept_store, TARGET_CODES)
+
+    num_training_steps = 3 * len(train_loader)
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=num_training_steps // 10,
+        num_training_steps=num_training_steps
+    )
+
+    best_f1 = 0
+
+    for epoch in range(3):
+        print(f"\nEpoch {epoch+1}/3")
+
+        shifamind_model.train()
+        total_loss = 0
+        loss_components = defaultdict(float)
+
+        for batch in tqdm(train_loader, desc="Training"):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+            concept_labels_batch = batch['concept_labels'].to(device)
+
+            optimizer.zero_grad()
+
+            outputs = shifamind_model(input_ids, attention_mask, concept_embeddings)
+
+            loss, components = criterion(
+                outputs['logits'],
+                outputs['concept_scores'],
+                labels,
+                concept_labels_batch
+            )
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(shifamind_model.parameters(), max_norm=1.0)
+
+            optimizer.step()
+            scheduler.step()
+
+            total_loss += loss.item()
+            for k, v in components.items():
+                loss_components[k] += v
+
+        avg_loss = total_loss / len(train_loader)
+
+        print(f"  Loss: {avg_loss:.4f}")
+        for k, v in loss_components.items():
+            print(f"    {k}: {v/len(train_loader):.4f}")
+
+        # Validation
+        shifamind_model.eval()
+        all_preds = []
+        all_labels = []
+
+        with torch.no_grad():
+            for batch in tqdm(val_loader, desc="Validation"):
+                input_ids = batch['input_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                labels = batch['labels'].to(device)
+
+                outputs = shifamind_model(input_ids, attention_mask, concept_embeddings)
+
+                preds = torch.sigmoid(outputs['logits']).cpu().numpy()
+                all_preds.append(preds)
+                all_labels.append(labels.cpu().numpy())
+
+        all_preds = np.vstack(all_preds)
+        all_labels = np.vstack(all_labels)
+        pred_binary = (all_preds > 0.5).astype(int)
+
+        macro_f1 = f1_score(all_labels, pred_binary, average='macro', zero_division=0)
+
+        print(f"  Val Macro F1: {macro_f1:.4f}")
+
+        if macro_f1 > best_f1:
+            best_f1 = macro_f1
+
+            torch.save({
+                'model_state_dict': shifamind_model.state_dict(),
+                'num_concepts': len(concept_store.concepts),
+                'concept_cuis': list(concept_store.concepts.keys()),
+                'concept_names': {cui: info['preferred_name'] for cui, info in concept_store.concepts.items()},
+                'concept_embeddings': concept_embeddings,
+                'target_codes': TARGET_CODES,
+                'macro_f1': best_f1
+            }, CHECKPOINT_FINAL)
+            print(f"  ✅ Saved checkpoint: {CHECKPOINT_FINAL} (F1: {best_f1:.4f})")
+
+    print(f"\n✅ Stage 4 complete. Best F1: {best_f1:.4f}")
+
+torch.cuda.empty_cache()
+
+print("\n✅ ALL 4 TRAINING STAGES COMPLETE!")
+
+# ============================================================================
+# @title 17. Complete Evaluation with All Fixes
 # @markdown Run comprehensive evaluation with all 4 explainability fixes
 # ============================================================================
 
