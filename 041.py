@@ -686,7 +686,7 @@ class ReasoningChainGenerator:
         }
 
     def generate_chain(self, diagnosis_code: str, diagnosis_confidence: float,
-                      concepts: List[Dict], evidence_spans: Optional[List[str]] = None) -> str:
+                      concepts: List[Dict], evidence_spans: Optional[List[str]] = None) -> Dict:
         """
         Generate a reasoning chain for a diagnostic prediction
 
@@ -697,7 +697,12 @@ class ReasoningChainGenerator:
             evidence_spans: Optional list of evidence text spans
 
         Returns:
-            Formatted reasoning chain string
+            Dictionary with:
+                - explanation: Formatted reasoning chain string
+                - diagnosis_code: ICD-10 code
+                - diagnosis_name: Human-readable diagnosis name
+                - confidence: Confidence score
+                - concepts: List of concept dicts
         """
         chain_parts = []
 
@@ -743,7 +748,14 @@ class ReasoningChainGenerator:
         else:
             chain_parts.append(self.templates['no_concepts'])
 
-        return "\n".join(chain_parts)
+        # Return structured dict
+        return {
+            'explanation': "\n".join(chain_parts),
+            'diagnosis_code': diagnosis_code,
+            'diagnosis_name': diagnosis_name,
+            'confidence': diagnosis_confidence,
+            'concepts': concepts
+        }
 
     def generate_batch_chains(self, diagnoses: List[str], confidences: List[float],
                              concept_lists: List[List[Dict]]) -> List[str]:
@@ -2112,6 +2124,7 @@ def run_complete_evaluation_041(model, test_loader, concept_store, umls_concepts
         print(f"Diagnosis: {reasoning_chain['diagnosis_name']}")
         print(f"Confidence: {reasoning_chain['confidence']:.1%}")
         print(f"Concepts: {len(reasoning_chain['concepts'])}")
+        print(f"\nReasoning:\n{reasoning_chain['explanation']}")
 
     # Compile final results
     final_results = {
