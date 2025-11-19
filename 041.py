@@ -1362,23 +1362,37 @@ class DiagnosisConditionalLabeler:
         self.pmi_scores = {}
 
     def build_cooccurrence_statistics(self, df_train, target_codes):
-        """Build diagnosis-concept co-occurrence statistics"""
+        """Build diagnosis-concept co-occurrence statistics from clinical text"""
         print("\n📊 Building co-occurrence statistics...")
+        print("   Strategy: Extract concepts from clinical text via term matching")
 
         for idx, row in tqdm(df_train.iterrows(), total=len(df_train), desc="  Processing"):
             diagnosis_codes = row['icd_codes']
+            clinical_text = str(row.get('text', '')).lower()
             note_concepts = set()
 
+            # Count diagnoses
             for dx_code in diagnosis_codes:
                 self.diagnosis_counts[dx_code] += 1
 
-                dx_variants = self._get_icd_variants(dx_code)
-                for variant in dx_variants:
-                    if variant in self.icd_to_cui:
-                        cuis = self.icd_to_cui[variant]
-                        valid_cuis = [cui for cui in cuis if cui in self.concept_store.concepts]
-                        note_concepts.update(valid_cuis)
+            # Extract concepts from clinical TEXT (not ICD codes!)
+            # Match concept terms against the clinical note
+            for cui, concept_info in self.concept_store.concepts.items():
+                # Get all terms for this concept
+                preferred_name = concept_info.get('preferred_name', '').lower()
+                all_terms = [preferred_name] + [t.lower() for t in concept_info.get('terms', [])]
 
+                # Check if any term appears in the clinical text
+                matched = False
+                for term in all_terms:
+                    if len(term) >= 4 and term in clinical_text:  # Min 4 chars to avoid false matches
+                        matched = True
+                        break
+
+                if matched:
+                    note_concepts.add(cui)
+
+            # Build co-occurrence counts
             for concept_cui in note_concepts:
                 self.concept_counts[concept_cui] += 1
                 for dx_code in diagnosis_codes:
