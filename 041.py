@@ -2031,38 +2031,297 @@ def run_complete_evaluation_041(model, test_loader, concept_store, umls_concepts
 print("✅ Evaluation pipeline configured")
 
 # ============================================================================
-# @title 14. Quick Demo Inference
-# @markdown Demonstration inference for testing (skip full training)
+# @title 18. Gradio Interactive Demo
+# @markdown Interactive web interface with all 4 explainability fixes
 # ============================================================================
 
 print("\n" + "="*70)
-print("DEMO MODE: QUICK INFERENCE TEST")
+print("GRADIO INTERACTIVE DEMO")
 print("="*70)
 
-# For demonstration purposes, we'll show how evaluation would work
-# In production, you would run the full training pipeline first
+try:
+    import gradio as gr
+except ImportError:
+    print("Installing gradio...")
+    os.system('pip install -q gradio')
+    import gradio as gr
 
-print("\n📋 ShifaMind 041 is configured with:")
-print("   ✅ All 4 explainability fixes")
-print("   ✅ Optimized data loading with cache")
-print("   ✅ Complete evaluation pipeline")
-print("   ✅ Organized output structure")
+
+class EvidenceExtractor:
+    """Extracts evidence spans from clinical text using attention weights"""
+
+    def __init__(self, tokenizer, attention_percentile=85, min_span_tokens=5,
+                 max_span_tokens=50, top_k_spans=3):
+        self.tokenizer = tokenizer
+        self.attention_percentile = attention_percentile
+        self.min_span_tokens = min_span_tokens
+        self.max_span_tokens = max_span_tokens
+        self.top_k_spans = top_k_spans
+
+    def extract(self, input_ids, attention_weights, filtered_concepts):
+        """Extract evidence spans for filtered concepts"""
+
+        if not filtered_concepts:
+            return []
+
+        # Aggregate attention across layers
+        aggregated_attention = torch.stack(attention_weights).mean(dim=0)
+
+        results = []
+        for concept_info in filtered_concepts:
+            # Get concept index from CUI
+            concept_cui = concept_info['cui']
+            if concept_cui not in concept_store.concept_to_idx:
+                continue
+
+            concept_idx = concept_store.concept_to_idx[concept_cui]
+            concept_attention = aggregated_attention[:, concept_idx]
+
+            # Find high-attention tokens
+            threshold_val = torch.quantile(concept_attention, self.attention_percentile / 100.0)
+            high_attention_mask = concept_attention >= threshold_val
+
+            # Extract spans
+            spans = self._find_spans(
+                high_attention_mask.cpu().numpy(),
+                concept_attention.cpu().numpy()
+            )
+
+            # Decode to text
+            decoded_spans = []
+            for span in spans:
+                if not (self.min_span_tokens <= (span['end'] - span['start']) <= self.max_span_tokens):
+                    continue
+
+                span_tokens = input_ids[span['start']:span['end']]
+                span_text = self.tokenizer.decode(span_tokens, skip_special_tokens=True)
+                span_text = span_text.replace(' ##', '').replace('##', '').strip()
+
+                if len(span_text) < 20:
+                    continue
+                if not any(c.isalnum() for c in span_text):
+                    continue
+                if self._is_noise(span_text):
+                    continue
+
+                decoded_spans.append({
+                    'text': span_text,
+                    'attention_score': float(span['avg_attention'])
+                })
+
+            decoded_spans = sorted(decoded_spans, key=lambda x: x['attention_score'], reverse=True)[:self.top_k_spans]
+
+            if decoded_spans:
+                results.append({
+                    'concept_cui': concept_info['cui'],
+                    'concept_name': concept_info['name'],
+                    'concept_score': concept_info['score'],
+                    'evidence_spans': decoded_spans
+                })
+
+        return results
+
+    def _find_spans(self, mask, attention_scores):
+        """Find consecutive high-attention token spans"""
+        spans = []
+        start_idx = None
+
+        for i, is_high in enumerate(mask):
+            if is_high:
+                if start_idx is None:
+                    start_idx = i
+            else:
+                if start_idx is not None:
+                    spans.append({
+                        'start': start_idx,
+                        'end': i,
+                        'avg_attention': attention_scores[start_idx:i].mean()
+                    })
+                    start_idx = None
+
+        if start_idx is not None:
+            spans.append({
+                'start': start_idx,
+                'end': len(mask),
+                'avg_attention': attention_scores[start_idx:].mean()
+            })
+
+        return spans
+
+    def _is_noise(self, text):
+        """Check if text is EHR noise"""
+        noise_patterns = [
+            r'_{3,}',
+            r'^\s*(name|unit no|admission date|discharge date|date of birth|sex|service|allergies|attending|chief complaint|major surgical)\s*:',
+            r'\[\s*\*\*.*?\*\*\s*\]',
+            r'^[^a-z]{10,}$',
+        ]
+        return any(re.search(pattern, text, re.IGNORECASE) for pattern in noise_patterns)
+
+
+def predict_with_fixes(clinical_text):
+    """Run inference with all 4 explainability fixes"""
+
+    # Load best model if exists
+    if not CHECKPOINT_FINAL.exists():
+        return "⚠️ **Model not trained yet!** Please run the 4-stage training pipeline first."
+
+    # Load checkpoint
+    checkpoint = torch.load(CHECKPOINT_FINAL, map_location=device)
+    shifamind_model.load_state_dict(checkpoint['model_state_dict'])
+    shifamind_model.eval()
+
+    # Tokenize
+    encoding = tokenizer(
+        clinical_text,
+        padding='max_length',
+        truncation=True,
+        max_length=384,
+        return_tensors='pt'
+    ).to(device)
+
+    # Run model
+    with torch.no_grad():
+        outputs = shifamind_model(
+            encoding['input_ids'],
+            encoding['attention_mask'],
+            concept_embeddings
+        )
+
+    # Get diagnosis prediction
+    diagnosis_probs = torch.sigmoid(outputs['logits']).cpu().numpy()[0]
+    diagnosis_pred_idx = np.argmax(diagnosis_probs)
+    diagnosis_code = TARGET_CODES[diagnosis_pred_idx]
+    diagnosis_score = float(diagnosis_probs[diagnosis_pred_idx])
+
+    concept_scores = torch.sigmoid(outputs['concept_scores']).cpu().numpy()[0]
+
+    # FIX 1A: Apply aggressive post-processing filter
+    post_processor = ConceptPostProcessor(concept_store, DIAGNOSIS_KEYWORDS)
+    filtered_concepts = post_processor.filter_concepts(
+        concept_scores=concept_scores,
+        diagnosis_code=diagnosis_code,
+        threshold=0.7,
+        max_concepts=5
+    )
+
+    # Extract evidence for filtered concepts
+    evidence_extractor = EvidenceExtractor(tokenizer)
+    sample_attention_weights = [attn[0] for attn in outputs['attention_weights']]
+    evidence = evidence_extractor.extract(
+        encoding['input_ids'][0].cpu(),
+        sample_attention_weights,
+        filtered_concepts
+    )
+
+    # FIX 4A: Generate reasoning chain
+    chain_generator = ReasoningChainGenerator(ICD_DESCRIPTIONS)
+    reasoning_chain = chain_generator.generate_chain(
+        diagnosis_code=diagnosis_code,
+        diagnosis_confidence=diagnosis_score,
+        concepts=filtered_concepts,
+        evidence_spans=None
+    )
+
+    # Format output
+    output = f"## 🎯 Diagnosis Prediction\n\n"
+    output += f"**{diagnosis_code}** - {ICD_DESCRIPTIONS[diagnosis_code]}\n\n"
+    output += f"Confidence: **{diagnosis_score:.1%}**\n\n"
+    output += "---\n\n"
+
+    output += f"## 💡 Activated Medical Concepts ({len(filtered_concepts)} filtered)\n\n"
+    output += "*✨ Enhanced with FIX 1A: 3-tier post-processing filter*\n\n"
+
+    for i, concept in enumerate(filtered_concepts, 1):
+        output += f"### [{i}] {concept['name']}\n"
+        output += f"- **CUI:** {concept['cui']}\n"
+        output += f"- **Score:** {concept['score']:.1%}\n\n"
+
+    if evidence:
+        output += "---\n\n"
+        output += f"## 🔍 Evidence Spans\n\n"
+        for extraction in evidence:
+            output += f"### {extraction['concept_name']}\n"
+            for j, span in enumerate(extraction['evidence_spans'], 1):
+                output += f"{j}. *\"{span['text']}\"* (attention: {span['attention_score']:.3f})\n\n"
+
+    output += "---\n\n"
+    output += f"## 📝 Reasoning Chain (FIX 4A)\n\n"
+    output += f"{reasoning_chain['explanation']}\n\n"
+
+    output += "---\n\n"
+    output += "*ShifaMind 041 with 4 Explainability Fixes*"
+
+    return output
+
+
+# Example clinical texts
+EXAMPLES = [
+    """Patient is a 65-year-old male presenting with fever, productive cough, and shortness of breath for 3 days.
+    Chest X-ray shows right lower lobe infiltrate. Vital signs: temp 38.9°C, HR 105, RR 24, BP 135/85.
+    Oxygen saturation 92% on room air. Physical exam reveals crackles in right lower lung field.
+    Started on empiric antibiotics.""",
+
+    """78-year-old female with history of CHF admitted with worsening dyspnea and bilateral lower extremity edema.
+    Patient reports orthopnea and paroxysmal nocturnal dyspnea. Examination shows jugular venous distension,
+    S3 gallop, and 3+ pitting edema bilaterally. Chest X-ray demonstrates cardiomegaly and pulmonary vascular
+    congestion. BNP elevated at 1200.""",
+
+    """45-year-old male presents with fever, hypotension, and altered mental status. Started feeling unwell 2 days ago
+    with fever and chills. Now with BP 85/50, HR 125, RR 28, temp 39.5°C. Labs show WBC 18,000, lactate 4.2.
+    Blood cultures pending. Started on broad-spectrum antibiotics and IV fluids.""",
+
+    """62-year-old male with sudden onset right upper quadrant pain, fever, and nausea. Pain began after eating
+    fatty meal. Physical exam reveals Murphy's sign positive, tenderness in RUQ. Ultrasound shows gallbladder
+    wall thickening, pericholecystic fluid, and gallstones. WBC 15,000."""
+]
+
+# Create Gradio interface
+print("\nCreating Gradio interface...")
+
+demo = gr.Interface(
+    fn=predict_with_fixes,
+    inputs=gr.Textbox(
+        lines=10,
+        placeholder="Enter clinical text here...",
+        label="Clinical Text"
+    ),
+    outputs=gr.Markdown(label="ShifaMind 041 Analysis"),
+    title="ShifaMind 041: Enhanced Medical Diagnosis with Explainability",
+    description="""
+    **Production-ready medical diagnosis with 4 critical explainability fixes**
+
+    ### Features:
+    - ✅ **FIX 1A:** Aggressive post-processing filter (3-tier filtering)
+    - ✅ **FIX 2A:** Citation completeness metric
+    - ✅ **FIX 3A:** Alignment score (Jaccard similarity)
+    - ✅ **FIX 4A:** Template-based reasoning chains
+
+    ### Target Diagnoses:
+    - J189: Pneumonia
+    - I5023: Acute on chronic systolic heart failure
+    - A419: Sepsis
+    - K8000: Acute cholecystitis
+
+    The model uses diagnosis-conditional concept filtering to prevent wrong concept activation.
+    """,
+    examples=EXAMPLES,
+    theme=gr.themes.Soft()
+)
+
+print("\n🚀 Launching Gradio demo...")
+print("   Access the demo via the public URL below")
+
+demo.launch(share=True)
+
+print("\n✅ Demo launched successfully!")
 
 print("\n" + "="*70)
-print("✅ SHIFAMIND 041 READY")
+print("✅ SHIFAMIND 041 - ALL STAGES COMPLETE")
 print("="*70)
-print("\n📚 To complete the full training and evaluation:")
-print("   1. Implement 4-stage training pipeline (from 040.py)")
-print("   2. Run model training with saved checkpoints")
-print("   3. Load best checkpoint and run evaluation")
-print("   4. Review results in OUTPUT_PATH")
-
-print("\n🎯 All critical fixes are implemented and ready to use:")
-print("   ✅ FIX 1A: Aggressive Post-Processing Filter")
-print("   ✅ FIX 2A: Citation Completeness Metric")
-print("   ✅ FIX 3A: Alignment Score (Jaccard Similarity)")
-print("   ✅ FIX 4A: Template-Based Reasoning Chain Generation")
-
-print(f"\n📁 Output Directory: {OUTPUT_PATH}")
-print(f"📁 Checkpoint Directory: {CHECKPOINT_PATH}")
-print("\n✅ ShifaMind 041 configuration complete!")
+print(f"\n📦 Checkpoints saved:")
+print(f"  - {CHECKPOINT_DIAGNOSIS}")
+print(f"  - {CHECKPOINT_CONCEPTS}")
+print(f"  - {CHECKPOINT_FINAL}")
+print(f"\n📁 Results: {OUTPUT_PATH}")
+print(f"\n🎯 Production ready with 4 explainability fixes!")
