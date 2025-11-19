@@ -405,10 +405,33 @@ class OutputManager:
             dir_path.mkdir(exist_ok=True)
 
     def save_metrics(self, metrics: dict, filename: str):
-        """Save metrics as JSON"""
+        """Save metrics as JSON with numpy type handling"""
+        import numpy as np
+
+        def convert_numpy(obj):
+            """Convert numpy types to native Python types"""
+            if isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return obj
+
+        # Convert all numpy types recursively
+        def convert_dict(d):
+            if isinstance(d, dict):
+                return {k: convert_dict(v) for k, v in d.items()}
+            elif isinstance(d, (list, tuple)):
+                return [convert_dict(item) for item in d]
+            else:
+                return convert_numpy(d)
+
+        converted_metrics = convert_dict(metrics)
+
         filepath = self.metrics_dir / filename
         with open(filepath, 'w') as f:
-            json.dump(metrics, f, indent=2)
+            json.dump(converted_metrics, f, indent=2)
         print(f"   💾 Saved: {filepath}")
 
     def save_figure(self, fig, filename: str):
@@ -1425,9 +1448,24 @@ class DiagnosisConditionalLabeler:
         """Generate labels for entire dataset with caching"""
 
         if cache_file and os.path.exists(cache_file):
-            print(f"\n📦 Loading cached labels from {cache_file}...")
-            with open(cache_file, 'rb') as f:
-                return pickle.load(f)
+            # Validate cache before loading
+            try:
+                with open(cache_file, 'rb') as f:
+                    cached_labels = pickle.load(f)
+
+                # Check if cache is valid (has reasonable number of positive labels per sample)
+                avg_positives_per_sample = cached_labels.sum(axis=1).mean() if len(cached_labels) > 0 else 0
+
+                # If average is too low (< 2 concepts per sample), cache is from broken PMI run
+                if avg_positives_per_sample < 2.0:
+                    print(f"\n⚠️  Cached labels invalid (avg {avg_positives_per_sample:.2f} concepts/sample < 2.0)")
+                    print(f"   Regenerating labels with current PMI statistics...")
+                else:
+                    print(f"\n📦 Loading valid cached labels from {cache_file}...")
+                    print(f"   (avg {avg_positives_per_sample:.2f} concepts/sample)")
+                    return cached_labels
+            except Exception as e:
+                print(f"\n⚠️  Cache loading failed ({e}), regenerating...")
 
         print(f"\n🏷️  Generating labels for {len(df_data)} samples...")
 
