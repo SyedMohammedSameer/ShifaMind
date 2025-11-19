@@ -789,13 +789,28 @@ umls_loader_instance = FastUMLSLoader(UMLS_META_PATH)
 umls_loader_instance.concepts = umls_concepts
 umls_concepts = umls_loader_instance.load_definitions(umls_concepts)
 
-# Create icd10_to_cui mapping
+# Create icd10_to_cui mapping by re-parsing MRCONSO for ICD10CM codes
+print("\n🔗 Building ICD-10 to CUI mapping...")
 umls_loader_instance.icd10_to_cui = defaultdict(list)
-for cui, info in umls_concepts.items():
-    sources = info.get('sources', {})
-    if 'ICD10CM' in sources:
-        for code in sources['ICD10CM']:
+
+# Re-parse MRCONSO.RRF to get all ICD10CM mappings
+mrconso_path = UMLS_META_PATH / 'MRCONSO.RRF'
+icd_mappings_found = 0
+
+with open(mrconso_path, 'r', encoding='utf-8', errors='ignore') as f:
+    for line in tqdm(f, desc="  Scanning for ICD10CM codes"):
+        fields = line.strip().split('|')
+        if len(fields) < 15:
+            continue
+
+        cui, lang, sab, code = fields[0], fields[1], fields[11], fields[13]
+
+        # Only process ICD10CM codes for concepts we have
+        if sab == 'ICD10CM' and code and cui in umls_concepts:
             umls_loader_instance.icd10_to_cui[code].append(cui)
+            icd_mappings_found += 1
+
+print(f"  ✅ Built {len(umls_loader_instance.icd10_to_cui)} ICD-10 → CUI mappings ({icd_mappings_found} total links)")
 
 print(f"\n✅ Loaded {len(umls_concepts)} UMLS concepts")
 
