@@ -1,0 +1,134 @@
+{
+  "description": "Sample clinical notes for ShifaMind testing and demonstration",
+  "note": "These are synthetic clinical notes created for testing purposes. Each diagnosis has 3 example cases.",
+  "diagnoses": {
+    "J189": "Pneumonia, unspecified organism",
+    "I5023": "Acute on chronic systolic heart failure",
+    "A419": "Sepsis, unspecified organism",
+    "K8000": "Calculus of gallbladder with acute cholecystitis"
+  },
+  "examples": [
+    {
+      "id": "pneumonia_001",
+      "diagnosis_code": "J189",
+      "diagnosis_name": "Pneumonia, unspecified organism",
+      "text": "72-year-old male presents with 3-day history of fever (38.9°C), productive cough with yellow-green sputum, and progressive shortness of breath. Reports pleuritic chest pain worse with deep inspiration. Physical examination reveals decreased breath sounds and crackles in the right lower lobe. Respiratory rate 24/min, oxygen saturation 91% on room air. Chest X-ray demonstrates right lower lobe infiltrate. White blood cell count elevated at 15,200.",
+      "expected_concepts": ["Pneumonia", "Fever", "Cough", "Dyspnea", "Crackles", "Leukocytosis"],
+      "severity": "moderate",
+      "notes": "Classic community-acquired pneumonia presentation"
+    },
+    {
+      "id": "pneumonia_002",
+      "diagnosis_code": "J189",
+      "diagnosis_name": "Pneumonia, unspecified organism",
+      "text": "85-year-old female nursing home resident with altered mental status and fever for 2 days. Temperature 39.1°C, heart rate 110 bpm. Examination shows coarse crackles bilaterally in lung bases. Patient appears lethargic and confused. Chest radiograph reveals bilateral lower lobe opacities. Sputum culture pending. Elevated WBC at 16,800 with left shift.",
+      "expected_concepts": ["Pneumonia", "Fever", "Altered mental status", "Crackles", "Leukocytosis"],
+      "severity": "moderate-severe",
+      "notes": "Healthcare-associated pneumonia in elderly patient"
+    },
+    {
+      "id": "pneumonia_003",
+      "diagnosis_code": "J189",
+      "diagnosis_name": "Pneumonia, unspecified organism",
+      "text": "55-year-old male smoker with COPD presents with worsening dyspnea and increased sputum production. Fever 38.5°C, tachypneic at 28 breaths/min. Auscultation reveals diminished breath sounds and bronchial breathing in left upper lobe. CXR shows left upper lobe consolidation. Labs notable for leukocytosis 14,500 and elevated procalcitonin.",
+      "expected_concepts": ["Pneumonia", "Dyspnea", "Fever", "Sputum production", "Consolidation", "Leukocytosis"],
+      "severity": "moderate",
+      "notes": "Pneumonia in COPD patient"
+    },
+    {
+      "id": "heart_failure_001",
+      "diagnosis_code": "I5023",
+      "diagnosis_name": "Acute on chronic systolic heart failure",
+      "text": "68-year-old male with history of ischemic cardiomyopathy presents with 2-week worsening dyspnea on exertion and orthopnea requiring 3 pillows to sleep. Reports bilateral lower extremity edema and 10-pound weight gain. Physical exam reveals elevated JVP at 12 cm, bibasilar crackles, S3 gallop, and 3+ pitting edema to knees bilaterally. BNP elevated at 1,450 pg/mL. Chest X-ray shows pulmonary vascular congestion and bilateral pleural effusions. Echocardiogram demonstrates EF 25%.",
+      "expected_concepts": ["Heart failure", "Dyspnea", "Orthopnea", "Edema", "JVD", "S3 gallop", "Elevated BNP", "Pulmonary congestion"],
+      "severity": "moderate-severe",
+      "notes": "Classic acute decompensation of chronic heart failure"
+    },
+    {
+      "id": "heart_failure_002",
+      "diagnosis_code": "I5023",
+      "diagnosis_name": "Acute on chronic systolic heart failure",
+      "text": "75-year-old female with known CHF presents with acute decompensation. Patient reports paroxysmal nocturnal dyspnea and orthopnea. Unable to lie flat. Physical examination notable for respiratory distress, bibasilar crackles, jugular venous distension, and S3 heart sound. Lower extremity edema 3+. BNP 2,100. CXR reveals cardiomegaly with pulmonary edema.",
+      "expected_concepts": ["Heart failure", "Paroxysmal nocturnal dyspnea", "Orthopnea", "Respiratory distress", "Crackles", "JVD", "Edema", "Elevated BNP", "Pulmonary edema"],
+      "severity": "severe",
+      "notes": "Acute decompensation with pulmonary edema"
+    },
+    {
+      "id": "heart_failure_003",
+      "diagnosis_code": "I5023",
+      "diagnosis_name": "Acute on chronic systolic heart failure",
+      "text": "62-year-old male with dilated cardiomyopathy admitted with acute on chronic systolic heart failure exacerbation. Reports increasing shortness of breath, fatigue, and decreased exercise tolerance over past month. Weight gain of 15 pounds. Exam shows elevated JVP, hepatomegaly, ascites, and bilateral lower extremity edema. Echo shows severely reduced EF at 20%. NT-proBNP 3,500.",
+      "expected_concepts": ["Heart failure", "Cardiomyopathy", "Dyspnea", "Fatigue", "JVD", "Hepatomegaly", "Edema", "Reduced ejection fraction", "Elevated BNP"],
+      "severity": "severe",
+      "notes": "Advanced heart failure with multi-organ involvement"
+    },
+    {
+      "id": "sepsis_001",
+      "diagnosis_code": "A419",
+      "diagnosis_name": "Sepsis, unspecified organism",
+      "text": "45-year-old female with known UTI presents to ED with altered mental status, fever 39.8°C, and hypotension (BP 85/50). Patient appears confused and diaphoretic. Heart rate 125 bpm, respiratory rate 32/min. Skin is warm and flushed. Laboratory findings show WBC 22,000 with bandemia, lactate 4.5 mmol/L, creatinine elevated at 2.1 from baseline 0.8. Blood cultures drawn. Meeting sepsis criteria with suspected urosepsis.",
+      "expected_concepts": ["Sepsis", "Fever", "Hypotension", "Altered mental status", "Tachycardia", "Tachypnea", "Leukocytosis", "Elevated lactate", "Acute kidney injury"],
+      "severity": "severe",
+      "notes": "Sepsis from urinary source with organ dysfunction"
+    },
+    {
+      "id": "sepsis_002",
+      "diagnosis_code": "A419",
+      "diagnosis_name": "Sepsis, unspecified organism",
+      "text": "70-year-old male post-operative day 3 from abdominal surgery develops fever 38.9°C, tachycardia 130 bpm, hypotension 80/45 mmHg requiring vasopressors. Patient is lethargic with decreased urine output. Labs remarkable for WBC 24,500, lactate 5.2, and acute kidney injury. Procalcitonin elevated at 15. Suspected intra-abdominal infection with septic shock.",
+      "expected_concepts": ["Sepsis", "Septic shock", "Fever", "Hypotension", "Tachycardia", "Altered mental status", "Leukocytosis", "Elevated lactate", "Organ dysfunction"],
+      "severity": "critical",
+      "notes": "Post-operative septic shock"
+    },
+    {
+      "id": "sepsis_003",
+      "diagnosis_code": "A419",
+      "diagnosis_name": "Sepsis, unspecified organism",
+      "text": "82-year-old female with pneumonia progressing to sepsis. Temperature 40.1°C, BP 78/40, HR 140, RR 35. Patient is confused and diaphoretic. Skin mottled with delayed capillary refill. Labs show WBC 28,000, lactate 6.8, platelets dropping to 90,000. Creatinine 2.8, liver enzymes elevated. Multiple organ dysfunction. Blood cultures positive for Streptococcus pneumoniae.",
+      "expected_concepts": ["Sepsis", "Septic shock", "Fever", "Hypotension", "Confusion", "Leukocytosis", "Elevated lactate", "Multi-organ dysfunction", "Thrombocytopenia"],
+      "severity": "critical",
+      "notes": "Severe sepsis with multi-organ failure"
+    },
+    {
+      "id": "cholecystitis_001",
+      "diagnosis_code": "K8000",
+      "diagnosis_name": "Calculus of gallbladder with acute cholecystitis",
+      "text": "52-year-old obese female presents with 6-hour history of severe right upper quadrant pain radiating to right shoulder. Pain began after fatty meal. Associated with nausea and vomiting. Temperature 38.4°C. Physical examination reveals positive Murphy's sign with inspiratory arrest on palpation of RUQ. Abdominal ultrasound shows gallbladder wall thickening 5mm, pericholecystic fluid, and multiple gallstones. WBC 13,500.",
+      "expected_concepts": ["Cholecystitis", "Gallstones", "Abdominal pain", "Right upper quadrant pain", "Murphy sign", "Fever", "Nausea", "Vomiting", "Gallbladder wall thickening", "Leukocytosis"],
+      "severity": "moderate",
+      "notes": "Classic acute cholecystitis presentation"
+    },
+    {
+      "id": "cholecystitis_002",
+      "diagnosis_code": "K8000",
+      "diagnosis_name": "Calculus of gallbladder with acute cholecystitis",
+      "text": "65-year-old male with sudden onset severe epigastric and right upper quadrant abdominal pain for 8 hours. Reports fever, chills, and vomiting. Examination shows marked RUQ tenderness with guarding and positive Murphy's sign. Temperature 39.2°C. CT abdomen reveals distended gallbladder with wall thickening, gallstones, and surrounding fluid. Labs show leukocytosis 16,200, elevated alkaline phosphatase and mild hyperbilirubinemia.",
+      "expected_concepts": ["Cholecystitis", "Acute cholecystitis", "Gallstones", "Abdominal pain", "RUQ pain", "Murphy sign", "Fever", "Nausea", "Vomiting", "Gallbladder wall thickening", "Leukocytosis", "Hyperbilirubinemia"],
+      "severity": "moderate-severe",
+      "notes": "Acute cholecystitis with possible biliary obstruction"
+    },
+    {
+      "id": "cholecystitis_003",
+      "diagnosis_code": "K8000",
+      "diagnosis_name": "Calculus of gallbladder with acute cholecystitis",
+      "text": "48-year-old female with history of gallstones presents with acute cholecystitis. Severe RUQ pain for 12 hours, worse with movement. Fever 38.8°C, positive Murphy's sign, mild jaundice noted. Ultrasound demonstrates thick-walled gallbladder (6mm) with stones and pericholecystic fluid. WBC 15,800 with left shift. Elevated alkaline phosphatase 250 U/L and total bilirubin 3.2 mg/dL.",
+      "expected_concepts": ["Cholecystitis", "Acute cholecystitis", "Gallstones", "Cholelithiasis", "Abdominal pain", "RUQ pain", "Murphy sign", "Fever", "Jaundice", "Gallbladder wall thickening", "Leukocytosis", "Elevated liver enzymes"],
+      "severity": "moderate-severe",
+      "notes": "Acute cholecystitis with cholestasis"
+    }
+  ],
+  "usage": {
+    "testing": "Use these examples to test model predictions",
+    "demo": "Load examples into the Gradio demo interface",
+    "validation": "Verify that model correctly predicts each diagnosis",
+    "api": "Use with final_inference.py for batch predictions"
+  },
+  "metadata": {
+    "created": "2025-11-20",
+    "author": "Mohammed Sameer Syed",
+    "institution": "University of Arizona",
+    "total_examples": 12,
+    "diagnoses_count": 4,
+    "examples_per_diagnosis": 3
+  }
+}
