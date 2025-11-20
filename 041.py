@@ -1161,7 +1161,7 @@ class TargetedWhitelistLabeler:
         
         total = sum(len(v) for v in self.whitelist.values())
         print(f"\n  ✅ Total whitelist concepts: {total}")
-        print(f"  ✅ Expected avg labels per sample: {total/len(self.required_terms):.1f} (healthy range: 8-15)")
+        print(f"  ✅ Expected avg labels per sample: {total/4:.1f} (healthy range: 8-15)")
         
         return set([cui for cuis in self.whitelist.values() for cui in cuis])
     
