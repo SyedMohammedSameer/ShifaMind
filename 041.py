@@ -1060,120 +1060,52 @@ print(f"  Model parameters: {sum(p.numel() for p in shifamind_model.parameters()
 print("✅ Model architecture defined and initialized")
 
 # ============================================================================
-# 13. WHITELIST LABELING - Using term_to_cuis from targeted loading (FIXED)
+# 13. WHITELIST LABELING - Using term_to_cuis from targeted loading
 # ============================================================================
 
 print("\n" + "="*70)
-print("WHITELIST LABELING FROM TARGETED CONCEPTS (TOP-K SELECTION)")
+print("WHITELIST LABELING FROM TARGETED CONCEPTS")
 print("="*70)
 
 class TargetedWhitelistLabeler:
-    """
-    Generate labels using concepts found during targeted loading
-    
-    CRITICAL FIX: Limit to TOP-K concepts per diagnosis to prevent
-    over-activation (was activating 3,665 concepts per sample!)
-    """
+    """Generate labels using concepts found during targeted loading"""
     
     def __init__(self, concept_store, term_to_cuis, required_terms):
         self.concept_store = concept_store
         self.term_to_cuis = term_to_cuis
         self.required_terms = required_terms
         self.whitelist = {}
-        self.top_k = 15  # Maximum concepts per diagnosis
     
     def build_whitelist(self):
-        """Build whitelist with TOP-K selection to prevent over-activation"""
-        print("\n📊 Building whitelist with TOP-K selection...")
-        print(f"   Strategy: Select top {self.top_k} concepts per diagnosis by match quality")
+        """Build whitelist from targeted search results"""
+        print("\n📊 Building whitelist from search results...")
         
         for dx_code, terms_list in self.required_terms.items():
-            # Score all matching concepts
-            concept_scores = defaultdict(int)
-            concept_match_info = {}  # Track which terms matched
+            whitelist_cuis = set()
             
             for term in terms_list:
                 term_lower = term.lower().strip()
-                if term_lower not in self.term_to_cuis:
-                    continue
-                
-                # Get all CUIs matching this term
-                for cui in self.term_to_cuis[term_lower]:
-                    if cui not in self.concept_store.concepts:
-                        continue
-                    
-                    concept_info = self.concept_store.concepts[cui]
-                    concept_name = concept_info['preferred_name'].lower()
-                    
-                    # Score by match quality (exact match > substring > contains)
-                    if concept_name == term_lower:
-                        # Exact match - highest priority
-                        concept_scores[cui] += 100
-                        match_type = "exact"
-                    elif concept_name.startswith(term_lower) or term_lower.startswith(concept_name):
-                        # Prefix match - high priority
-                        concept_scores[cui] += 50
-                        match_type = "prefix"
-                    elif term_lower in concept_name and len(term_lower) >= 4:
-                        # Substring match for substantial terms - medium priority
-                        concept_scores[cui] += 10
-                        match_type = "substring"
-                    elif len(term_lower.split()) > 1:
-                        # Multi-word term contained - lower priority
-                        concept_scores[cui] += 5
-                        match_type = "multi-word"
-                    else:
-                        # Weak match
-                        concept_scores[cui] += 1
-                        match_type = "weak"
-                    
-                    # Track match info
-                    if cui not in concept_match_info:
-                        concept_match_info[cui] = {
-                            'name': concept_info['preferred_name'],
-                            'terms': [term],
-                            'match_types': [match_type]
-                        }
-                    else:
-                        concept_match_info[cui]['terms'].append(term)
-                        concept_match_info[cui]['match_types'].append(match_type)
+                if term_lower in self.term_to_cuis:
+                    # Get CUIs that exist in concept store
+                    for cui in self.term_to_cuis[term_lower]:
+                        if cui in self.concept_store.concepts:
+                            whitelist_cuis.add(cui)
             
-            # Select TOP-K concepts by score
-            if concept_scores:
-                top_concepts = sorted(
-                    concept_scores.items(), 
-                    key=lambda x: x[1], 
-                    reverse=True
-                )[:self.top_k]
-                
-                self.whitelist[dx_code] = [cui for cui, score in top_concepts]
-                
-                # Show what was selected
-                print(f"\n  {dx_code}: {len(self.whitelist[dx_code])} concepts (from {len(concept_scores)} candidates)")
-                print(f"    Top 5 selected:")
-                for i, (cui, score) in enumerate(top_concepts[:5]):
-                    info = concept_match_info[cui]
-                    print(f"      {i+1}. {info['name'][:50]} (score: {score}, matched: {len(info['terms'])} terms)")
-            else:
-                # No matches found
-                self.whitelist[dx_code] = []
-                print(f"\n  {dx_code}: 0 concepts (no matches found)")
+            self.whitelist[dx_code] = list(whitelist_cuis)
+            print(f"  {dx_code}: {len(whitelist_cuis)} concepts")
         
         total = sum(len(v) for v in self.whitelist.values())
         print(f"\n  ✅ Total whitelist concepts: {total}")
-        print(f"  ✅ Expected avg labels per sample: {total/4:.1f} (healthy range: 8-15)")
         
         return set([cui for cuis in self.whitelist.values() for cui in cuis])
     
     def generate_labels(self, diagnosis_codes: List[str]) -> List[int]:
-        """Generate binary label vector for given diagnosis codes"""
         activated_cuis = set()
         
         for dx_code in diagnosis_codes:
             if dx_code in self.whitelist:
                 activated_cuis.update(self.whitelist[dx_code])
         
-        # Create label vector matching concept store order
         labels = []
         for cui in self.concept_store.concepts.keys():
             labels.append(1 if cui in activated_cuis else 0)
@@ -1181,7 +1113,6 @@ class TargetedWhitelistLabeler:
         return labels
     
     def generate_dataset_labels(self, df_data, cache_file=None):
-        """Generate labels for entire dataset"""
         print(f"\n🏷️  Generating labels for {len(df_data)} samples...")
         
         all_labels = []
@@ -1198,23 +1129,19 @@ class TargetedWhitelistLabeler:
         avg_labels = all_labels.sum(axis=1).mean()
         print(f"  ✅ Avg labels per sample: {avg_labels:.1f}")
         
-        if 5 <= avg_labels <= 20:
-            print(f"  ✅ Labels in healthy range (5-20)!")
-        elif avg_labels < 5:
-            print(f"  ⚠️  Low labels ({avg_labels:.1f} < 5) - increase top_k")
+        if 5 <= avg_labels <= 15:
+            print(f"  ✅ Labels in healthy range!")
         else:
-            print(f"  ⚠️  High labels ({avg_labels:.1f} > 20) - decrease top_k")
+            print(f"  ⚠️  Labels outside expected range (5-15)")
         
         return all_labels
 
 
-# Build labeler with TOP-K selection
+# Build labeler
 labeler = TargetedWhitelistLabeler(concept_store, term_to_cuis, REQUIRED_MEDICAL_TERMS)
 whitelist_concepts = labeler.build_whitelist()
 
 print(f"\n✅ Whitelist ready: {len(whitelist_concepts)} unique concepts")
-print(f"   This is a MASSIVE improvement from 9,742 concepts!")
-
 
 # ============================================================================
 # 14. GENERATE CONCEPT LABELS (Stage 2)
