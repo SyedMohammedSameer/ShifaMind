@@ -1,352 +1,226 @@
-# Google Colab Setup Guide
+# ShifaMind - Dead Simple Colab Setup
 
-This guide explains how to run ShifaMind in Google Colab.
+**NO Google Drive needed. NO path configuration needed. Just 3 simple steps.**
 
-## Quick Setup
+---
 
-### Option 1: Clone from GitHub (Recommended)
+## Step 1: Clone the Repo
 
 ```python
-# Clone the repository
-!git clone https://github.com/SyedMohammedSameer/ShifaMind.git
-%cd ShifaMind
+!git clone https://github.com/SyedMohammedSameer/ShifaMind_Capstone.git
+%cd ShifaMind_Capstone
 
-# Install only what's needed (Colab already has most packages)
-!pip install -q -r requirements_colab.txt
-
-# Mount Google Drive (for MIMIC-IV data)
-from google.colab import drive
-drive.mount('/content/drive')
-```
-
-### Option 2: Upload Files Manually
-
-If you prefer to upload files directly:
-
-1. Upload all `.py` files to Colab:
-   - `config.py`
-   - `final_concept_filter.py`
-   - `final_knowledge_base_generator.py`
-   - `final_inference.py`
-   - `final_model_training.py`
-   - `final_evaluation.py`
-   - `final_demo.py`
-
-2. Install only what's missing in Colab:
-```python
+# Install Gradio (only thing Colab doesn't have)
 !pip install -q gradio
-# That's it! Colab already has torch, transformers, scikit-learn, pandas, etc.
 ```
 
 ---
 
-## Running the Pipeline
-
-### Step 1: Configure Paths
-
-Edit `config.py` to point to your Google Drive:
+## Step 2: Run Setup Script
 
 ```python
-# In config.py, update BASE_PATH:
-BASE_PATH = Path('/content/drive/MyDrive/ShifaMind')
+!python setup_colab.py
 ```
 
-### Step 2: Generate Knowledge Base
+This creates the folder structure:
+```
+/content/ShifaMind_Data/
+├── UMLS/          ← Upload your UMLS files here
+├── ICD10/         ← Upload your ICD-10 files here
+├── MIMIC/         ← Upload your MIMIC files here
+├── Models/        ← Outputs will go here
+└── Results/       ← Results will go here
+```
+
+---
+
+## Step 3: Upload Your Data Files
+
+### Option A: Using Colab's File Browser (EASIEST)
+
+1. Click the 📁 folder icon on the left sidebar
+2. Navigate to `/content/ShifaMind_Data/UMLS/`
+3. Click the upload button (looks like a page with an arrow)
+4. Upload these files:
+   - `MRCONSO.RRF`
+   - `MRSTY.RRF`
+
+5. Navigate to `/content/ShifaMind_Data/ICD10/`
+6. Upload:
+   - `icd10cm-codes-2024.txt`
+
+7. Navigate to `/content/ShifaMind_Data/MIMIC/`
+8. Upload (for training):
+   - `noteevents.csv.gz`
+   - `diagnoses_icd.csv.gz`
+   - `patients.csv.gz`
+   - `admissions.csv.gz`
+
+### Option B: Using Python Upload Widget
 
 ```python
-# Run knowledge base generator
+from google.colab import files
+import shutil
+
+# Upload UMLS files
+print("📤 Upload MRCONSO.RRF:")
+uploaded = files.upload()
+for filename in uploaded.keys():
+    shutil.move(filename, f'/content/ShifaMind_Data/UMLS/{filename}')
+
+print("📤 Upload MRSTY.RRF:")
+uploaded = files.upload()
+for filename in uploaded.keys():
+    shutil.move(filename, f'/content/ShifaMind_Data/UMLS/{filename}')
+
+# Upload ICD-10 file
+print("📤 Upload icd10cm-codes-2024.txt:")
+uploaded = files.upload()
+for filename in uploaded.keys():
+    shutil.move(filename, f'/content/ShifaMind_Data/ICD10/{filename}')
+
+# Upload MIMIC files (repeat for each file)
+print("📤 Upload noteevents.csv.gz:")
+uploaded = files.upload()
+for filename in uploaded.keys():
+    shutil.move(filename, f'/content/ShifaMind_Data/MIMIC/{filename}')
+```
+
+---
+
+## Step 4: Verify Files Are Uploaded
+
+```python
+!python setup_colab.py
+```
+
+You should see ✅ checkmarks for all files.
+
+---
+
+## Step 5: Run the Pipeline
+
+### Generate Knowledge Base (5-10 min)
+
+```python
 !python final_knowledge_base_generator.py
 ```
 
-**Expected output:**
-```
-🏥 ShifaMind Clinical Knowledge Base Generator
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📂 Loading UMLS Concepts from: /content/drive/MyDrive/ShifaMind/00_Data/UMLS/...
-  ✅ Loaded 51,420 unique concepts
-...
-```
-
-### Step 3: Train Model (Long-running)
+### Train Model (Several Hours - GPU Recommended)
 
 ```python
-# Run training (takes several hours on GPU)
 !python final_model_training.py
 ```
 
-**Note:** Training requires significant GPU time. Consider using:
-- Colab Pro for longer GPU sessions
-- Checkpointing to resume training
-
-**Expected stages:**
-1. Stage 1: Diagnosis head training (3 epochs)
-2. Stage 2: Concept head training (2 epochs)
-3. Stage 3: Joint fine-tuning (3 epochs)
-
-### Step 4: Run Evaluation
+### Evaluate Model
 
 ```python
-# Evaluate the trained model
 !python final_evaluation.py
 ```
 
-### Step 5: Launch Demo
+### Launch Demo
 
 ```python
-# Launch interactive Gradio demo
 !python final_demo.py
 ```
 
-The demo will provide a public URL you can share.
-
 ---
 
-## Python API Usage (Recommended for Colab)
+## Complete Copy-Paste Script
 
-Instead of using shell commands (`!python`), you can import and use the modules directly:
-
-### Quick Inference Example
-
-```python
-from final_inference import ShifaMindPredictor
-
-# Initialize predictor
-predictor = ShifaMindPredictor()
-
-# Predict on clinical note
-clinical_note = """
-72-year-old male presents with fever (38.9°C), productive cough,
-and shortness of breath. Chest X-ray shows right lower lobe infiltrate.
-"""
-
-result = predictor.predict(clinical_note)
-
-# Display results
-print(f"Diagnosis: {result['diagnosis']['name']}")
-print(f"Code: {result['diagnosis']['code']}")
-print(f"Confidence: {result['diagnosis']['confidence']:.1%}")
-
-print("\nTop Clinical Concepts:")
-for concept in result['concepts'][:5]:
-    print(f"  - {concept['name']} ({concept['score']:.1%})")
-```
-
-### Training from Python
-
-```python
-import sys
-sys.path.append('/content/ShifaMind')
-
-from final_model_training import main
-from pathlib import Path
-
-# Create args object
-class Args:
-    output_path = Path('/content/drive/MyDrive/ShifaMind/03_Models/training_results')
-    max_samples_per_code = 20000
-    retrain = False
-
-args = Args()
-args.output_path.mkdir(parents=True, exist_ok=True)
-
-# Run training
-main(args)
-```
-
----
-
-## Common Issues & Solutions
-
-### Issue 1: Import Errors
-
-**Error:** `ModuleNotFoundError: No module named 'config'`
-
-**Solution:** Ensure you're in the correct directory:
-```python
-import os
-print(os.getcwd())  # Should show /content/ShifaMind
-
-# If not, change directory:
-%cd /content/ShifaMind
-```
-
-### Issue 2: CUDA Out of Memory
-
-**Error:** `RuntimeError: CUDA out of memory`
-
-**Solution:** Use CPU or reduce batch size:
-```python
-# Option 1: Use CPU
-predictor = ShifaMindPredictor(device='cpu')
-
-# Option 2: Edit config.py and reduce BATCH_SIZE
-# Change from 8 to 4 or 2
-```
-
-### Issue 3: Files Not Found
-
-**Error:** `FileNotFoundError: [Errno 2] No such file or directory: '/content/drive/MyDrive/ShifaMind/00_Data/...'`
-
-**Solution:**
-1. Mount Google Drive:
-```python
-from google.colab import drive
-drive.mount('/content/drive')
-```
-
-2. Verify path exists:
-```python
-!ls /content/drive/MyDrive/ShifaMind/
-```
-
-3. Update `config.py` with correct paths
-
-### Issue 4: Argparse Errors (FIXED)
-
-**Previous Error:** `error: unrecognized arguments: -f /root/.local/share/jupyter/runtime/kernel-...`
-
-**Status:** ✅ Fixed in latest version using `parse_known_args()`
-
-If you still see this error, make sure you've pulled the latest code from GitHub.
-
----
-
-## Data Requirements
-
-### Required Data Files
-
-Ensure these files exist in your Google Drive:
-
-```
-/content/drive/MyDrive/ShifaMind/
-├── 00_Data/
-│   ├── UMLS/
-│   │   ├── MRCONSO.RRF
-│   │   ├── MRSTY.RRF
-│   │   └── icd10cm_codes_2023.txt
-│   └── MIMIC-IV/
-│       ├── noteevents.csv.gz
-│       ├── diagnoses_icd.csv.gz
-│       ├── patients.csv.gz
-│       └── admissions.csv.gz
-├── 01_Processed/
-│   └── (will be created during processing)
-├── 02_Checkpoints/
-│   └── (will be created during training)
-└── 03_Models/
-    └── (will be created for final models)
-```
-
-### Obtaining MIMIC-IV Data
-
-1. Complete CITI training: https://physionet.org/about/citi-course/
-2. Request access: https://physionet.org/content/mimiciv/
-3. Download required files
-4. Upload to Google Drive
-
-### Obtaining UMLS Data
-
-1. Register for UMLS account: https://www.nlm.nih.gov/research/umls/
-2. Download Metathesaurus files
-3. Extract MRCONSO.RRF and MRSTY.RRF
-4. Upload to Google Drive
-
----
-
-## Performance Tips
-
-### 1. Use GPU Runtime
-
-**Settings → Runtime type → Hardware accelerator → GPU**
-
-### 2. Enable High-RAM
-
-**Settings → Runtime type → Runtime shape → High-RAM**
-
-### 3. Keep Session Alive
-
-Colab sessions timeout after inactivity. Use this script:
-
-```javascript
-function KeepAlive() {
-    console.log("Keeping session alive");
-    document.querySelector("colab-connect-button").click();
-}
-setInterval(KeepAlive, 60000);  // Click every 60 seconds
-```
-
-Paste in browser console (F12).
-
-### 4. Save Checkpoints Frequently
-
-Training automatically saves checkpoints after each stage to Google Drive.
-
----
-
-## Complete Colab Notebook Example
-
-Here's a complete notebook you can copy-paste:
+Here's everything in one block:
 
 ```python
 # ============================================================================
-# SHIFAMIND - Complete Colab Setup
+# SHIFAMIND - COMPLETE COLAB SETUP (COPY-PASTE THIS)
 # ============================================================================
 
-# 1. Setup environment
-!git clone https://github.com/SyedMohammedSameer/ShifaMind.git
-%cd ShifaMind
-!pip install -q gradio  # Only install what's missing
+# 1. Clone repo and install dependencies
+!git clone https://github.com/SyedMohammedSameer/ShifaMind_Capstone.git
+%cd ShifaMind_Capstone
+!pip install -q gradio
 
-# 2. Mount Google Drive
-from google.colab import drive
-drive.mount('/content/drive')
+# 2. Setup folder structure
+!python setup_colab.py
 
-# 3. Verify GPU
-import torch
-print(f"CUDA available: {torch.cuda.is_available()}")
-print(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None'}")
+# 3. NOW UPLOAD YOUR FILES (see instructions above)
+print("\n⚠️  STOP HERE AND UPLOAD YOUR DATA FILES ⚠️")
+print("Upload files to /content/ShifaMind_Data/ folders")
+print("Then run the rest of the code below...")
 
-# 4. Generate knowledge base (5-10 minutes)
-print("\n🏥 Generating knowledge base...")
+# 4. Verify files (run after uploading)
+!python setup_colab.py
+
+# 5. Generate knowledge base
 !python final_knowledge_base_generator.py
 
-# 5. Train model (several hours)
-print("\n🎓 Training model...")
+# 6. Train model (takes several hours)
 !python final_model_training.py
 
-# 6. Run evaluation
-print("\n📊 Evaluating model...")
+# 7. Evaluate
 !python final_evaluation.py
-
-# 7. Test inference
-print("\n🔬 Testing inference...")
-from final_inference import ShifaMindPredictor
-
-predictor = ShifaMindPredictor()
-result = predictor.predict("""
-72-year-old male with fever, cough, and chest infiltrate.
-""")
-
-print(f"\nDiagnosis: {result['diagnosis']['name']}")
-print(f"Confidence: {result['diagnosis']['confidence']:.1%}")
 
 # 8. Launch demo
-print("\n🚀 Launching demo...")
 !python final_demo.py
 ```
 
 ---
 
-## Next Steps
+## FAQ
 
-- See [README.md](README.md) for project overview
-- See [docs/USAGE.md](docs/USAGE.md) for detailed API documentation
-- See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for development status
+### Q: Do I need Google Drive?
+**A:** No! Everything runs in Colab's local storage (`/content/`). Just upload files directly.
+
+### Q: Where do I get UMLS files?
+**A:**
+1. Register at https://www.nlm.nih.gov/research/umls/
+2. Download Metathesaurus
+3. Extract `MRCONSO.RRF` and `MRSTY.RRF`
+
+### Q: Where do I get ICD-10 codes?
+**A:** Download from https://www.cms.gov/medicare/coding-billing/icd-10-codes
+
+### Q: Where do I get MIMIC-IV?
+**A:**
+1. Complete CITI training: https://physionet.org/about/citi-course/
+2. Request access: https://physionet.org/content/mimiciv/
+
+### Q: What if Colab disconnects during training?
+**A:** Training automatically saves checkpoints. If disconnected, re-run and it will resume from the last checkpoint.
+
+### Q: Can I use CPU instead of GPU?
+**A:** Yes, but training will be VERY slow (days instead of hours). For testing, you can skip training and use pre-trained models.
+
+### Q: How much storage do I need?
+**A:**
+- UMLS files: ~5 GB
+- MIMIC-IV: ~20 GB
+- Models: ~2 GB
+- **Total: ~30 GB** (Colab free tier has ~100 GB)
 
 ---
 
-**For questions or issues, please open a GitHub issue.**
+## Troubleshooting
+
+### Error: "FileNotFoundError: MRCONSO.RRF"
+
+**Fix:** Upload `MRCONSO.RRF` to `/content/ShifaMind_Data/UMLS/`
+
+### Error: "ImportError: No module named 'gradio'"
+
+**Fix:** Run `!pip install gradio`
+
+### Error: "CUDA out of memory"
+
+**Fix:** The model is too large for Colab's free GPU. Options:
+1. Use Colab Pro for more GPU memory
+2. Run on CPU (very slow): Edit `config.py` and force CPU mode
+
+---
+
+**That's it! No path configuration, no Google Drive setup, just upload and run.** 🎉
+
+---
 
 **Author:** Mohammed Sameer Syed
 **Institution:** University of Arizona

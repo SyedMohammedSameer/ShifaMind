@@ -18,35 +18,50 @@ import os
 # PATHS CONFIGURATION
 # ============================================================================
 
-# Base path - can be overridden via environment variable
-BASE_PATH = Path(os.getenv('SHIFAMIND_BASE_PATH', '/content/drive/MyDrive/ShifaMind'))
+# Auto-detect environment and set base path
+def get_base_path():
+    """Auto-detect if running in Colab and set appropriate base path"""
+    # Check if running in Colab
+    try:
+        import google.colab
+        # Running in Colab - use simple local path
+        return Path('/content/ShifaMind_Data')
+    except ImportError:
+        # Not in Colab - check for environment variable or use current directory
+        if 'SHIFAMIND_BASE_PATH' in os.environ:
+            return Path(os.environ['SHIFAMIND_BASE_PATH'])
+        else:
+            # Use current directory's parent/ShifaMind_Data
+            return Path.cwd().parent / 'ShifaMind_Data'
 
-# Data paths
-DATA_PATH = BASE_PATH / '01_Raw_Datasets'
-UMLS_PATH = DATA_PATH / 'Extracted/umls-2025AA-metathesaurus-full/2025AA/META'
-ICD10_PATH = DATA_PATH / 'Extracted/icd10cm-CodesDescriptions-2024'
-MIMIC_PATH = DATA_PATH / 'Extracted/mimic-iv-3.1'
-MIMIC_NOTES_PATH = DATA_PATH / 'Extracted/mimic-iv-note-2.2/note'
+BASE_PATH = get_base_path()
 
-# UMLS files
+# Simple data folder structure (no nested subdirectories)
+DATA_PATH = BASE_PATH
+UMLS_PATH = DATA_PATH / 'UMLS'
+ICD10_PATH = DATA_PATH / 'ICD10'
+MIMIC_PATH = DATA_PATH / 'MIMIC'
+
+# UMLS files (directly in UMLS folder)
 MRCONSO_PATH = UMLS_PATH / 'MRCONSO.RRF'
 MRDEF_PATH = UMLS_PATH / 'MRDEF.RRF'
 MRSTY_PATH = UMLS_PATH / 'MRSTY.RRF'
 
-# ICD-10 files
+# ICD-10 files (directly in ICD10 folder)
 ICD10_CODES_PATH = ICD10_PATH / 'icd10cm-codes-2024.txt'
 
-# Model paths
-MODEL_PATH = BASE_PATH / '03_Models'
+# Model paths (in Models folder)
+MODEL_PATH = BASE_PATH / 'Models'
 CHECKPOINT_PATH = MODEL_PATH / 'checkpoints'
 KNOWLEDGE_BASE_PATH = MODEL_PATH / 'clinical_knowledge_base.json'
 
-# Results paths
-RESULTS_PATH = BASE_PATH / '04_Results'
+# Results paths (in Results folder)
+RESULTS_PATH = BASE_PATH / 'Results'
 EXPERIMENT_PATH = RESULTS_PATH / 'experiments'
 
 # Ensure directories exist
-for path in [MODEL_PATH, CHECKPOINT_PATH, RESULTS_PATH, EXPERIMENT_PATH]:
+for path in [DATA_PATH, UMLS_PATH, ICD10_PATH, MIMIC_PATH,
+             MODEL_PATH, CHECKPOINT_PATH, RESULTS_PATH, EXPERIMENT_PATH]:
     path.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
