@@ -1,0 +1,27 @@
+# ============================================================================
+# ShifaMind: Minimal Requirements for Google Colab
+# ============================================================================
+#
+# This is a minimal requirements file for Google Colab.
+# Colab already has most packages (torch, transformers, pandas, etc.)
+# Only install what's missing.
+#
+# Install with: pip install -r requirements_colab.txt
+#
+# ============================================================================
+
+# Web Interface (for demo) - NOT pre-installed in Colab
+gradio>=4.0.0
+
+# ============================================================================
+# That's it! Everything else is already in Colab:
+# - torch (pre-installed)
+# - transformers (pre-installed)
+# - numpy (pre-installed)
+# - scipy (pre-installed)
+# - pandas (pre-installed)
+# - scikit-learn (pre-installed)
+# - matplotlib (pre-installed)
+# - seaborn (pre-installed)
+# - tqdm (pre-installed)
+# ============================================================================

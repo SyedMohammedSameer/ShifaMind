@@ -11,8 +11,8 @@ This guide explains how to run ShifaMind in Google Colab.
 !git clone https://github.com/SyedMohammedSameer/ShifaMind.git
 %cd ShifaMind
 
-# Install dependencies
-!pip install -q -r requirements.txt
+# Install only what's needed (Colab already has most packages)
+!pip install -q -r requirements_colab.txt
 
 # Mount Google Drive (for MIMIC-IV data)
 from google.colab import drive
@@ -32,9 +32,10 @@ If you prefer to upload files directly:
    - `final_evaluation.py`
    - `final_demo.py`
 
-2. Install requirements:
+2. Install only what's missing in Colab:
 ```python
-!pip install transformers torch scikit-learn tqdm pandas matplotlib seaborn gradio
+!pip install -q gradio
+# That's it! Colab already has torch, transformers, scikit-learn, pandas, etc.
 ```
 
 ---
@@ -295,7 +296,7 @@ Here's a complete notebook you can copy-paste:
 # 1. Setup environment
 !git clone https://github.com/SyedMohammedSameer/ShifaMind.git
 %cd ShifaMind
-!pip install -q -r requirements.txt
+!pip install -q gradio  # Only install what's missing
 
 # 2. Mount Google Drive
 from google.colab import drive
