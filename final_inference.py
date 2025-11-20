@@ -440,7 +440,8 @@ Examples:
         help='Disable concept prediction (faster)'
     )
 
-    args = parser.parse_args()
+    # Use parse_known_args() to ignore Jupyter/Colab kernel arguments (e.g., -f)
+    args, unknown = parser.parse_known_args()
 
     # Get input text
     if args.text:
