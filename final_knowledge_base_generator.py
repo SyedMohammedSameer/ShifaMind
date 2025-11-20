@@ -551,6 +551,7 @@ Examples:
         help=f'Output path for knowledge base JSON (default: {OUTPUT_FILE})'
     )
 
-    args = parser.parse_args()
+    # Use parse_known_args() to ignore Jupyter/Colab kernel arguments (e.g., -f)
+    args, unknown = parser.parse_known_args()
 
     main(output_path=args.output)
